@@ -37,6 +37,28 @@ export async function selectProjectDirectory(): Promise<string | null> {
   return typeof selected === 'string' ? selected : null
 }
 
+export async function selectLocalDirectory(title: string): Promise<string | null> {
+  requireTauri()
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title,
+  })
+
+  return typeof selected === 'string' ? selected : null
+}
+
+export async function selectLocalFile(title: string): Promise<string | null> {
+  requireTauri()
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    title,
+  })
+
+  return typeof selected === 'string' ? selected : null
+}
+
 export const api = {
   parseMavenProject: (rootPath: string) =>
     invoke<MavenProject>('parse_maven_project', { rootPath }),
@@ -112,8 +134,8 @@ export function createDefaultBuildOptions(
     goals: ['clean', 'package'],
     profiles: [],
     properties: {},
-    alsoMake: false,
-    skipTests: false,
+    alsoMake: true,
+    skipTests: true,
     customArgs: [],
     editableCommand: '',
   }

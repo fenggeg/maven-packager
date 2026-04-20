@@ -60,6 +60,43 @@
   font-size: 12px;
 }
 
+.history-module-link {
+  display: inline-block;
+  max-width: 100%;
+  color: #167c5b;
+  cursor: pointer;
+}
+
+.history-module-link:hover {
+  color: #0f5f45;
+  text-decoration: underline;
+}
+
+.env-row,
+.option-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.env-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.env-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.env-path-input {
+  width: calc(100% - 78px);
+}
+
 .command-textarea textarea {
   font-family: Consolas, "Cascadia Mono", monospace;
 }
