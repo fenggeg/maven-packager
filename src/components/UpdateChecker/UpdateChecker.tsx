@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
 import {App, Button, Modal, Progress, Space, Typography} from 'antd'
 import type {Update} from '@tauri-apps/plugin-updater'
+import ReactMarkdown from 'react-markdown'
 import {
   type AppUpdateDownloadEvent,
   checkForAppUpdate,
@@ -9,7 +10,7 @@ import {
   isTauriRuntime,
 } from '../../services/tauri-api'
 
-const { Paragraph, Text } = Typography
+const { Text } = Typography
 
 type DownloadProgress = {
   downloaded: number
@@ -336,9 +337,19 @@ export function UpdateChecker() {
             {update.date && (
               <Text type="secondary">发布时间：{formatReleaseDate(update.date)}</Text>
             )}
-            <Paragraph className="update-notes" ellipsis={{ rows: 6, expandable: true }}>
-              {formatUpdateNotes(update)}
-            </Paragraph>
+            <div className="update-notes">
+              <ReactMarkdown
+                components={{
+                  a: ({ children, href }) => (
+                    <a href={href} target="_blank" rel="noreferrer">
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {formatUpdateNotes(update)}
+              </ReactMarkdown>
+            </div>
             {installing && (
               <div className="update-progress">
                 <Progress

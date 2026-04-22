@@ -196,12 +196,80 @@
 }
 
 .update-notes {
+  max-height: 260px;
   padding: 10px 12px;
   margin: 0;
-  white-space: pre-wrap;
+  overflow: auto;
   background: #f6f8f7;
   border: 1px solid #dfe6e2;
   border-radius: 6px;
+}
+
+.update-notes :first-child {
+  margin-top: 0;
+}
+
+.update-notes :last-child {
+  margin-bottom: 0;
+}
+
+.update-notes h1,
+.update-notes h2,
+.update-notes h3,
+.update-notes h4 {
+  margin: 12px 0 8px;
+  color: #1f2d27;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.update-notes h1 {
+  font-size: 18px;
+}
+
+.update-notes h2 {
+  font-size: 16px;
+}
+
+.update-notes h3,
+.update-notes h4 {
+  font-size: 14px;
+}
+
+.update-notes p,
+.update-notes ul,
+.update-notes ol {
+  margin: 0 0 8px;
+}
+
+.update-notes ul,
+.update-notes ol {
+  padding-left: 20px;
+}
+
+.update-notes li {
+  margin: 4px 0;
+}
+
+.update-notes code {
+  padding: 1px 4px;
+  background: #e8f1ec;
+  border-radius: 4px;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+}
+
+.update-notes pre {
+  padding: 10px;
+  overflow: auto;
+  background: #101513;
+  border-radius: 6px;
+}
+
+.update-notes pre code {
+  padding: 0;
+  color: #d7e4dd;
+  background: transparent;
 }
 
 .update-progress {
