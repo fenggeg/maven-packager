@@ -77,7 +77,7 @@ jobs:
           $notes = Get-ChangelogSection -Path $changelogPath -Version $releaseVersion -UseUnreleased:(!$isTagRelease)
 
           if ($isTagRelease -and -not $notes) {
-            Write-Error "CHANGELOG.md 中没有找到版本 $releaseVersion 的更新日志小节。请添加类似 '## [$releaseVersion]' 的内容后重新发布。"
+            Write-Error "Missing CHANGELOG.md section for version $releaseVersion. Add a heading like '## [$releaseVersion]' before publishing."
             exit 1
           }
 
@@ -86,17 +86,17 @@ jobs:
               Where-Object { $_ -and $_.Trim() -ne "" }
 
             if (-not $commits -or $commits.Count -eq 0) {
-              $commits = @("- 本次发布包含构建产物更新。")
+              $commits = @("- This build contains generated artifacts.")
             }
 
             $notes = @(
-              "## 更新内容",
+              "## Changes",
               "",
               $commits
             ) -join "`n"
           }
 
-          $delimiter = "RELEASE_NOTES_$([Guid]::NewGuid().ToString('N'))"
+          $delimiter = "RELEASE_NOTES_" + [Guid]::NewGuid().ToString("N")
           "body<<$delimiter" >> $env:GITHUB_OUTPUT
           $notes >> $env:GITHUB_OUTPUT
           "$delimiter" >> $env:GITHUB_OUTPUT
