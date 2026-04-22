@@ -9,7 +9,7 @@
 - Ant Design
 - Zustand
 - Rust 后端服务
-- 本地 JSON 存储
+- 本地 SQLite 存储
 
 ## 当前 MVP 状态
 
@@ -23,6 +23,7 @@
 - 已支持历史记录保存与回填。
 - 已支持常用模板保存、应用、删除。
 - 已支持 JDK/Maven/mvnw 设置持久化。
+- 已使用 SQLite 保存构建历史、常用模板和环境设置。
 
 ## 本地开发
 
@@ -54,13 +55,11 @@ npm run tauri:build
 
 ## 数据存储
 
-MVP 阶段使用 Tauri 应用数据目录下的 JSON 文件：
+应用使用 Tauri 应用数据目录下的 SQLite 数据库：
 
-- `history.json`：构建历史，最多保留最近 100 条。
-- `templates.json`：常用构建模板。
-- `settings.json`：JDK/Maven/mvnw 选择。
+- `app.sqlite3`：构建历史、常用模板、JDK/Maven/mvnw 设置和上次项目路径。
 
-后续可以平滑替换为 SQLite。
+构建历史最多保留最近 100 条。当前版本不兼容旧的 JSON 存储数据。
 
 ## 使用流程
 

@@ -18,6 +18,88 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate Release Notes
+        id: release_notes
+        shell: powershell
+        run: |
+          git fetch --tags --force
+
+          $isTagRelease = "${{ startsWith(github.ref, 'refs/tags/') }}" -eq "true"
+          $currentTag = "${{ github.ref_name }}"
+          $packageInfo = Get-Content package.json -Raw | ConvertFrom-Json
+          $releaseVersion = if ($isTagRelease) {
+            $currentTag -replace '^v', ''
+          } else {
+            $packageInfo.version
+          }
+          $changelogPath = "CHANGELOG.md"
+
+          function Get-ChangelogSection {
+            param(
+              [string] $Path,
+              [string] $Version,
+              [bool] $UseUnreleased
+            )
+
+            if (-not (Test-Path $Path)) {
+              return ""
+            }
+
+            $lines = Get-Content $Path
+            $escapedVersion = [Regex]::Escape($Version)
+            $versionHeadingPattern = "^\s*##\s+\[?v?$escapedVersion\]?(?:\s+-\s+.*)?\s*$"
+            $unreleasedHeadingPattern = "^\s*##\s+\[?Unreleased\]?\s*$"
+            $headingPattern = if ($UseUnreleased) { $unreleasedHeadingPattern } else { $versionHeadingPattern }
+            $capture = $false
+            $section = New-Object System.Collections.Generic.List[string]
+
+            foreach ($line in $lines) {
+              if ($line -match $headingPattern) {
+                $capture = $true
+                continue
+              }
+
+              if ($capture -and $line -match "^\s*##\s+") {
+                break
+              }
+
+              if ($capture) {
+                $section.Add($line)
+              }
+            }
+
+            return ($section -join "`n").Trim()
+          }
+
+          $notes = Get-ChangelogSection -Path $changelogPath -Version $releaseVersion -UseUnreleased:(!$isTagRelease)
+
+          if ($isTagRelease -and -not $notes) {
+            Write-Error "CHANGELOG.md 中没有找到版本 $releaseVersion 的更新日志小节。请添加类似 '## [$releaseVersion]' 的内容后重新发布。"
+            exit 1
+          }
+
+          if (-not $notes) {
+            $commits = git log -20 --pretty=format:"- %s (%h)" |
+              Where-Object { $_ -and $_.Trim() -ne "" }
+
+            if (-not $commits -or $commits.Count -eq 0) {
+              $commits = @("- 本次发布包含构建产物更新。")
+            }
+
+            $notes = @(
+              "## 更新内容",
+              "",
+              $commits
+            ) -join "`n"
+          }
+
+          $delimiter = "RELEASE_NOTES_$([Guid]::NewGuid().ToString('N'))"
+          "body<<$delimiter" >> $env:GITHUB_OUTPUT
+          $notes >> $env:GITHUB_OUTPUT
+          "$delimiter" >> $env:GITHUB_OUTPUT
 
       - name: Setup Node.js (LTS)
         uses: actions/setup-node@v4
@@ -44,11 +126,16 @@ jobs:
         with:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'windows-auto-build' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Maven Packager {0}', github.ref_name) || 'Maven Packager Auto Build' }}
+          releaseBody: ${{ steps.release_notes.outputs.body }}
+          generateReleaseNotes: false
           releaseDraft: ${{ !startsWith(github.ref, 'refs/tags/') }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           args: --ci --bundles nsis,msi
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
           updaterJsonPreferNsis: true
           uploadPlainBinary: true
+          retryAttempts: 2
 
       - name: Prepare Portable EXE
         shell: powershell
@@ -99,8 +186,88 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'windows-auto-build' }}
+          body: ${{ steps.release_notes.outputs.body }}
           draft: ${{ !startsWith(github.ref, 'refs/tags/') }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           files: portable-dist/*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Updater Metadata
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        shell: powershell
+        run: |
+          $latestJsonUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/latest.json"
+          Write-Host "Checking updater metadata: $latestJsonUrl"
+
+          $response = Invoke-WebRequest -Uri $latestJsonUrl -UseBasicParsing
+          $metadata = $response.Content | ConvertFrom-Json
+
+          if (-not $metadata.version) {
+            Write-Error "latest.json is missing version."
+            exit 1
+          }
+
+          if (-not $metadata.notes) {
+            Write-Error "latest.json is missing release notes."
+            exit 1
+          }
+
+          $platform = $metadata.platforms.'windows-x86_64'
+          if (-not $platform) {
+            $platform = $metadata.platforms.'windows-x86_64-nsis'
+          }
+
+          if (-not $platform) {
+            Write-Error "latest.json is missing windows-x86_64 updater metadata."
+            exit 1
+          }
+
+          if (-not $platform.url -or -not $platform.signature) {
+            Write-Error "latest.json updater metadata is missing url or signature."
+            exit 1
+          }
+
+          Invoke-WebRequest -Uri $platform.url -Method Head -UseBasicParsing | Out-Null
+          Write-Host "Updater metadata verified for version $($metadata.version)."
+
+      - name: Verify Configured Updater Endpoint
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        shell: powershell
+        run: |
+          $configuredUrl = "https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
+          Write-Host "Checking configured updater endpoint: $configuredUrl"
+
+          $metadata = $null
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+            try {
+              $response = Invoke-WebRequest -Uri $configuredUrl -UseBasicParsing
+              $metadata = $response.Content | ConvertFrom-Json
+              break
+            } catch {
+              Write-Host "Attempt $attempt failed, waiting for GitHub Releases metadata..."
+              Start-Sleep -Seconds 10
+            }
+          }
+
+          if (-not $metadata) {
+            Write-Error "Unable to fetch latest.json from the configured updater endpoint."
+            exit 1
+          }
+
+          if (-not $metadata.notes) {
+            Write-Error "Configured updater endpoint returned latest.json without release notes."
+            exit 1
+          }
+
+          $platform = $metadata.platforms.'windows-x86_64'
+          if (-not $platform) {
+            $platform = $metadata.platforms.'windows-x86_64-nsis'
+          }
+
+          if (-not $platform -or -not $platform.url -or -not $platform.signature) {
+            Write-Error "Configured updater endpoint returned incomplete Windows updater metadata."
+            exit 1
+          }
+
+          Write-Host "Configured updater endpoint verified for version $($metadata.version)."
