@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "maven-packager-desktop",
-  "version": "0.1.5",
+  "version": "1.0.0",
   "identifier": "com.local.mavenpackager",
   "build": {
     "frontendDist": "../dist",
