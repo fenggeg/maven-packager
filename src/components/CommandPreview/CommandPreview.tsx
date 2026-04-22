@@ -1,8 +1,8 @@
-import { Button, Card, Input, Modal, Space, Tag, Typography } from 'antd'
-import { PlayCircleOutlined, ReloadOutlined, SaveOutlined, StopOutlined } from '@ant-design/icons'
-import { useState } from 'react'
-import { useAppStore } from '../../store/useAppStore'
-import type { BuildStatus } from '../../types/domain'
+import {Button, Card, Input, Modal, Space, Tag, Typography} from 'antd'
+import {PlayCircleOutlined, ReloadOutlined, SaveOutlined, StopOutlined} from '@ant-design/icons'
+import {useState} from 'react'
+import {useAppStore} from '../../store/useAppStore'
+import type {BuildStatus} from '../../types/domain'
 
 const { TextArea } = Input
 const { Text, Title } = Typography
@@ -39,7 +39,7 @@ export function CommandPreview() {
   const durationText = durationMs ? `${(durationMs / 1000).toFixed(1)} 秒` : '暂无'
 
   return (
-    <Card title="命令预览" className="panel-card" size="small">
+    <Card title="命令预览" className="panel-card command-preview-card" size="small">
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <div className="command-status-bar">
           <div>

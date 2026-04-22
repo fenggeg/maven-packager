@@ -79,9 +79,9 @@ function App() {
             <Content className="app-content">
               <div className="workbench-grid">
                 <section className="workbench-column">
+                  <CommandPreview />
                   <EnvPanel />
                   <BuildOptionsPanel />
-                  <CommandPreview />
                 </section>
                 <section className="workbench-column">
                   <BuildLogPanel />

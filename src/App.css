@@ -1,9 +1,11 @@
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: #f6f8f7;
 }
 
 .app-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -24,22 +26,28 @@
 }
 
 .app-main {
-  min-height: calc(100vh - 86px);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .app-sider {
+  height: 100%;
   padding: 18px;
   background: #ffffff;
   border-right: 1px solid #dfe6e2;
-  overflow: auto;
+  overflow: hidden auto;
 }
 
 .app-content {
+  min-width: 0;
+  min-height: 0;
   padding: 18px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .workbench-grid {
+  height: 100%;
   display: grid;
   grid-template-columns: minmax(420px, 0.9fr) minmax(460px, 1.1fr);
   gap: 18px;
@@ -48,6 +56,8 @@
 }
 
 .workbench-column {
+  min-height: 0;
+  overflow: hidden auto;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -55,6 +65,7 @@
 }
 
 .panel-card {
+  flex: 0 0 auto;
   border: 1px solid #dfe6e2;
   box-shadow: none;
 }
@@ -87,6 +98,58 @@
   gap: 8px;
 }
 
+.env-card .ant-card-body {
+  padding-bottom: 10px;
+}
+
+.env-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.env-summary-item {
+  min-width: 0;
+  padding: 8px 10px;
+  background: #f6f8f7;
+  border: 1px solid #dfe6e2;
+  border-radius: 6px;
+}
+
+.env-summary-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.env-summary-main .ant-tag {
+  max-width: 68%;
+  margin-inline-end: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-summary-path {
+  display: block;
+  max-width: 100%;
+  margin-top: 4px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-config-collapse .ant-collapse-header {
+  padding: 2px 0 !important;
+}
+
+.env-config-collapse .ant-collapse-content-box {
+  padding: 8px 0 0 !important;
+}
+
 .env-heading {
   display: flex;
   align-items: center;
@@ -105,8 +168,26 @@
   width: calc(100% - 78px);
 }
 
+.env-path-input-single-action {
+  width: calc(100% - 72px);
+}
+
+.env-path-input-double-action {
+  width: calc(100% - 144px);
+}
+
 .command-textarea textarea {
   font-family: Consolas, "Cascadia Mono", monospace;
+}
+
+.command-preview-card {
+  border-color: #9fd5be;
+  box-shadow: 0 1px 0 rgba(22, 124, 91, 0.08);
+}
+
+.command-preview-card .ant-card-head {
+  background: #f2f7f4;
+  border-bottom-color: #cfe4d9;
 }
 
 .command-status-bar {
@@ -115,8 +196,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 12px;
-  background: #f2f7f4;
-  border: 1px solid #d7e5dd;
+  background: #edf7f2;
+  border: 1px solid #c6dfd2;
   border-radius: 6px;
 }
 
@@ -279,16 +360,30 @@
 }
 
 @media (max-width: 1120px) {
+  html,
+  body {
+    overflow: auto;
+  }
+
+  #root,
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+  }
+
   .app-header {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .app-main {
+    min-height: auto;
+    overflow: visible;
     flex-direction: column;
   }
 
   .app-sider {
+    height: auto;
     width: 100% !important;
     max-width: none !important;
     border-right: 0;
@@ -296,6 +391,15 @@
   }
 
   .workbench-grid {
+    height: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-column {
+    overflow: visible;
+  }
+
+  .env-summary-grid {
     grid-template-columns: 1fr;
   }
 
