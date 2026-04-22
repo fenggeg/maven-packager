@@ -1,5 +1,7 @@
 use crate::error::{to_user_error, AppResult};
-use crate::models::git::{GitBranch, GitPullResult, GitRepositoryStatus, GitSwitchBranchResult};
+use crate::models::git::{
+    GitBranch, GitCommit, GitPullResult, GitRepositoryStatus, GitSwitchBranchResult,
+};
 use crate::services::app_logger;
 use encoding_rs::GBK;
 use std::os::windows::process::CommandExt;
@@ -164,6 +166,46 @@ pub fn switch_git_branch(
     })
 }
 
+#[tauri::command]
+pub fn list_git_commits(app: AppHandle, root_path: String, limit: Option<usize>) -> AppResult<Vec<GitCommit>> {
+    let limit = limit.unwrap_or(30).clamp(1, 100).to_string();
+    app_logger::log_info(
+        &app,
+        "git.commits.list.start",
+        format!("root_path={}, limit={}", root_path, limit),
+    );
+
+    let repo_check = run_git(&root_path, &["rev-parse", "--is-inside-work-tree"])?;
+    if !repo_check.success || repo_check.stdout.trim() != "true" {
+        return Ok(Vec::new());
+    }
+
+    let output = run_git(
+        &root_path,
+        &[
+            "log",
+            "-n",
+            &limit,
+            "--date=iso-strict",
+            "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1e",
+        ],
+    )?;
+    if !output.success {
+        return Err(to_user_error(format!(
+            "读取 Git 提交记录失败：{}",
+            output.combined_output()
+        )));
+    }
+
+    let commits = parse_commits(&output.stdout);
+    app_logger::log_info(
+        &app,
+        "git.commits.list.success",
+        format!("root_path={}, count={}", root_path, commits.len()),
+    );
+    Ok(commits)
+}
+
 fn check_status(root_path: &str, fetch: bool) -> AppResult<GitRepositoryStatus> {
     let repo_check = run_git(root_path, &["rev-parse", "--is-inside-work-tree"])?;
     if !repo_check.success || repo_check.stdout.trim() != "true" {
@@ -242,6 +284,25 @@ fn check_status(root_path: &str, fetch: bool) -> AppResult<GitRepositoryStatus> 
         has_local_changes,
         message,
     })
+}
+
+fn parse_commits(output: &str) -> Vec<GitCommit> {
+    output
+        .split('\x1e')
+        .filter_map(|record| {
+            let fields = record.trim().split('\x1f').collect::<Vec<_>>();
+            if fields.len() < 5 {
+                return None;
+            }
+            Some(GitCommit {
+                hash: fields[0].to_string(),
+                short_hash: fields[1].to_string(),
+                author: fields[2].to_string(),
+                date: fields[3].to_string(),
+                subject: fields[4].to_string(),
+            })
+        })
+        .collect()
 }
 
 fn list_local_branches(root_path: &str) -> AppResult<Vec<GitBranch>> {

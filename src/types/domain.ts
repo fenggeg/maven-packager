@@ -42,6 +42,14 @@ export interface GitRepositoryStatus {
   message?: string
 }
 
+export interface GitCommit {
+  hash: string
+  shortHash: string
+  author: string
+  date: string
+  subject: string
+}
+
 export interface GitPullResult {
   success: boolean
   output: string

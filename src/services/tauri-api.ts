@@ -14,6 +14,7 @@ import type {
   BuildOptions,
   BuildTemplate,
   EnvironmentSettings,
+  GitCommit,
   GitPullResult,
   GitRepositoryStatus,
   GitSwitchBranchResult,
@@ -161,6 +162,9 @@ export const api = {
 
   checkGitStatus: (rootPath: string) =>
     invoke<GitRepositoryStatus>('check_git_status', { rootPath }),
+
+  listGitCommits: (rootPath: string, limit = 30) =>
+    invoke<GitCommit[]>('list_git_commits', { rootPath, limit }),
 
   fetchGitUpdates: (rootPath: string) =>
     invoke<GitRepositoryStatus>('fetch_git_updates', { rootPath }),

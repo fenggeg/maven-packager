@@ -276,6 +276,41 @@
   line-height: 1.4;
 }
 
+.git-commit-section {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #eef2f7;
+}
+
+.git-commit-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.git-commit-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.git-commit-item {
+  padding: 10px !important;
+  margin-bottom: 8px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.git-commit-content {
+  min-width: 0;
+  width: 100%;
+}
+
 .history-module-link {
   display: inline-block;
   max-width: 100%;

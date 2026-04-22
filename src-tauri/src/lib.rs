@@ -40,6 +40,7 @@ pub fn run() {
             commands::git::fetch_git_updates,
             commands::git::pull_git_updates,
             commands::git::switch_git_branch,
+            commands::git::list_git_commits,
             commands::history::list_build_history,
             commands::history::save_build_history,
             commands::template::list_templates,

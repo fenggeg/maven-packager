@@ -10,6 +10,7 @@ import type {
   BuildStatus,
   BuildTemplate,
   EnvironmentSettings,
+  GitCommit,
   GitRepositoryStatus,
   MavenModule,
   MavenProject,
@@ -33,7 +34,9 @@ interface AppState {
   history: BuildHistoryRecord[]
   templates: BuildTemplate[]
   gitStatus?: GitRepositoryStatus
+  gitCommits: GitCommit[]
   gitChecking: boolean
+  gitCommitsLoading: boolean
   gitPulling: boolean
   gitSwitching: boolean
   loading: boolean
@@ -43,6 +46,7 @@ interface AppState {
   parseProjectPath: (rootPath: string) => Promise<void>
   removeSavedProject: (rootPath: string) => Promise<void>
   checkGitStatus: (rootPath?: string) => Promise<void>
+  loadGitCommits: (rootPath?: string) => Promise<void>
   fetchGitUpdates: () => Promise<void>
   pullGitUpdates: () => Promise<void>
   switchGitBranch: (branchName: string) => Promise<void>
@@ -207,6 +211,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedModuleIds: [],
   savedProjectPaths: [],
   gitChecking: false,
+  gitCommits: [],
+  gitCommitsLoading: false,
   gitPulling: false,
   gitSwitching: false,
   loading: false,
@@ -243,7 +249,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   parseProjectPath: async (rootPath: string) => {
-    set({ loading: true, error: undefined, logs: [], artifacts: [], gitStatus: undefined })
+    set({
+      loading: true,
+      error: undefined,
+      logs: [],
+      artifacts: [],
+      gitStatus: undefined,
+      gitCommits: [],
+    })
     try {
       const [project, environment] = await Promise.all([
         api.parseMavenProject(rootPath),
@@ -295,6 +308,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const gitStatus = await api.checkGitStatus(targetPath)
       set({ gitStatus })
+      void get().loadGitCommits(targetPath)
     } catch (error) {
       set({
         gitStatus: {
@@ -306,9 +320,28 @@ export const useAppStore = create<AppState>((set, get) => ({
           hasLocalChanges: false,
           message: getErrorMessage(error),
         },
+        gitCommits: [],
       })
     } finally {
       set({ gitChecking: false })
+    }
+  },
+
+  loadGitCommits: async (rootPath?: string) => {
+    const targetPath = rootPath ?? get().project?.rootPath
+    if (!targetPath) {
+      set({ gitCommits: [] })
+      return
+    }
+
+    set({ gitCommitsLoading: true })
+    try {
+      const gitCommits = await api.listGitCommits(targetPath, 30)
+      set({ gitCommits })
+    } catch {
+      set({ gitCommits: [] })
+    } finally {
+      set({ gitCommitsLoading: false })
     }
   },
 
@@ -322,6 +355,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const gitStatus = await api.fetchGitUpdates(targetPath)
       set({ gitStatus })
+      await get().loadGitCommits(targetPath)
     } catch (error) {
       set({ error: getErrorMessage(error) })
     } finally {
@@ -339,6 +373,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const result = await api.pullGitUpdates(targetPath)
       set({ gitStatus: result.status })
+      await get().loadGitCommits(targetPath)
       await get().parseProjectPath(targetPath)
     } catch (error) {
       set({ error: getErrorMessage(error) })
@@ -358,6 +393,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const result = await api.switchGitBranch(targetPath, branchName)
       set({ gitStatus: result.status })
+      await get().loadGitCommits(targetPath)
       await get().parseProjectPath(targetPath)
     } catch (error) {
       set({ error: getErrorMessage(error) })
