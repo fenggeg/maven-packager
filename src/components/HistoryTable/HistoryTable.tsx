@@ -1,9 +1,9 @@
 import {
-  CopyOutlined,
-  FolderOpenOutlined,
-  FullscreenOutlined,
-  PlayCircleOutlined,
-  RollbackOutlined
+    CopyOutlined,
+    FolderOpenOutlined,
+    FullscreenOutlined,
+    PlayCircleOutlined,
+    RollbackOutlined
 } from '@ant-design/icons'
 import {Button, List, Modal, Space, Table, Tag, Tooltip, Typography} from 'antd'
 import type {ColumnsType} from 'antd/es/table'
@@ -113,30 +113,30 @@ export function HistoryTable() {
     },
     {
       title: '操作',
-      width: 260,
+      width: 160,
       render: (_, record) => (
         <Space wrap>
-          <Button
-            icon={<PlayCircleOutlined />}
-            size="small"
-            type="primary"
-            onClick={() => void rerunHistoryNow(record)}
-          >
-            重跑
-          </Button>
-          <Button icon={<RollbackOutlined />} size="small" onClick={() => rerunHistory(record)}>
-            恢复
-          </Button>
-          <Button
-            icon={<CopyOutlined />}
-            size="small"
-            onClick={() => void navigator.clipboard?.writeText(record.command)}
-          >
-            复制
-          </Button>
-          <Button icon={<FolderOpenOutlined />} size="small" onClick={() => handleOpen(record)}>
-            打开
-          </Button>
+          <Tooltip title="重跑">
+            <Button
+              icon={<PlayCircleOutlined />}
+              size="small"
+              type="primary"
+              onClick={() => void rerunHistoryNow(record)}
+            />
+          </Tooltip>
+          <Tooltip title="恢复">
+            <Button icon={<RollbackOutlined />} size="small" onClick={() => rerunHistory(record)} />
+          </Tooltip>
+          <Tooltip title="复制命令">
+            <Button
+              icon={<CopyOutlined />}
+              size="small"
+              onClick={() => void navigator.clipboard?.writeText(record.command)}
+            />
+          </Tooltip>
+          <Tooltip title="打开目录">
+            <Button icon={<FolderOpenOutlined />} size="small" onClick={() => handleOpen(record)} />
+          </Tooltip>
         </Space>
       ),
     },

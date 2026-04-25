@@ -1,5 +1,5 @@
-import {Button, Descriptions, Empty, Input, Modal, Space, Table, Tag, Typography} from 'antd'
-import {CopyOutlined, FullscreenOutlined} from '@ant-design/icons'
+import {Button, Descriptions, Empty, Input, Modal, Popconfirm, Space, Table, Tag, Tooltip, Typography} from 'antd'
+import {CopyOutlined, DeleteOutlined, FullscreenOutlined, PlayCircleOutlined} from '@ant-design/icons'
 import type {ColumnsType} from 'antd/es/table'
 import {useMemo, useRef, useState} from 'react'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
@@ -27,6 +27,9 @@ const classifyLine = (line: string) => {
 export function TaskPipelineHistoryTable() {
   const taskPipelineRuns = useWorkflowStore((state) => state.taskPipelineRuns)
   const taskPipelineLogsByRunId = useWorkflowStore((state) => state.taskPipelineLogsByRunId)
+  const taskPipelines = useWorkflowStore((state) => state.taskPipelines)
+  const deleteTaskPipelineRun = useWorkflowStore((state) => state.deleteTaskPipelineRun)
+  const rerunTaskPipeline = useWorkflowStore((state) => state.rerunTaskPipeline)
   const [openRun, setOpenRun] = useState<TaskPipelineRun>()
   const [logKeyword, setLogKeyword] = useState('')
   const [logExpanded, setLogExpanded] = useState(false)
@@ -73,12 +76,42 @@ export function TaskPipelineHistoryTable() {
     },
     {
       title: '操作',
-      width: 120,
-      render: (_, record) => (
-        <Button size="small" onClick={() => { setOpenRun(record); setLogKeyword('') }}>
-          详情
-        </Button>
-      ),
+      width: 160,
+      render: (_, record) => {
+        const pipelineExists = taskPipelines.some((p) => p.id === record.pipelineId)
+        return (
+          <Space wrap>
+            <Tooltip title={pipelineExists ? '重跑任务链' : '任务链模板已不存在'}>
+              <Button
+                size="small"
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                disabled={!pipelineExists}
+                onClick={() => void rerunTaskPipeline(record)}
+              />
+            </Tooltip>
+            <Tooltip title="详情">
+              <Button
+                size="small"
+                icon={<FullscreenOutlined />}
+                onClick={() => { setOpenRun(record); setLogKeyword('') }}
+              />
+            </Tooltip>
+            <Popconfirm
+              title="删除执行记录？"
+              description="确定要删除这条任务执行记录吗？"
+              okText="删除"
+              okType="danger"
+              cancelText="取消"
+              onConfirm={() => void deleteTaskPipelineRun(record.id)}
+            >
+              <Tooltip title="删除">
+                <Button size="small" danger type="text" icon={<DeleteOutlined />} />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
+        )
+      },
     },
   ], [])
 

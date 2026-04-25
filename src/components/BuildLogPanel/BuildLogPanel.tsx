@@ -1,7 +1,14 @@
-import {CopyOutlined, FullscreenOutlined} from '@ant-design/icons'
-import {Button, Card, Empty, Input, List, Modal, Radio, Space, Tag, Tooltip, Typography} from 'antd'
+import {
+    CopyOutlined,
+    DeleteOutlined,
+    FullscreenOutlined,
+    PauseCircleOutlined,
+    PlayCircleOutlined
+} from '@ant-design/icons'
+import {Button, Card, Input, List, Modal, Radio, Space, Tag, Tooltip, Typography} from 'antd'
 import {useEffect, useRef, useState} from 'react'
 import {useAppStore} from '../../store/useAppStore'
+import {useNavigationStore} from '../../store/navigationStore'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
 import type {BuildDiagnosis, BuildLogEvent, BuildStatus} from '../../types/domain'
 
@@ -95,9 +102,13 @@ export function BuildLogPanel() {
   const [expanded, setExpanded] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
-  const [activeSource, setActiveSource] = useState<LogSource>('build')
+  const activeSource = useNavigationStore((state) => state.inspectorLogSource)
+  const setActiveSource = useNavigationStore((state) => state.setInspectorLogSource)
 
   const isDeploymentRunning = currentDeploymentTask != null && !['success', 'failed', 'cancelled'].includes(currentDeploymentTask.status)
+
+  // Alias for local readability
+  const setActiveSourceLocal = (source: LogSource) => setActiveSource(source)
 
   // Get current log lines based on active source
   const pipelineRunId = currentTaskPipelineRun?.id
@@ -105,11 +116,11 @@ export function BuildLogPanel() {
   const deploymentTaskId = currentDeploymentTask?.id
   const deploymentLogs = deploymentLogsByTaskId[deploymentTaskId ?? ''] ?? []
 
-  const lastLaunchRef = useRef({
-    buildStartedAt,
-    pipelineRunId,
-    deploymentTaskId,
-  })
+  const lastLaunchRef = useRef<{
+    buildStartedAt?: number
+    pipelineRunId?: string
+    deploymentTaskId?: string
+  }>({})
 
   useEffect(() => {
     const previous = lastLaunchRef.current
@@ -141,6 +152,7 @@ export function BuildLogPanel() {
     deploymentTaskId,
     isDeploymentRunning,
     pipelineRunId,
+    setActiveSource,
   ])
 
   const currentLogCount = activeSource === 'build' ? logs.length : activeSource === 'pipeline' ? pipelineLogs.length : deploymentLogs.length
@@ -285,37 +297,48 @@ export function BuildLogPanel() {
         className="panel-card"
         size="small"
         extra={
-          <Space wrap>
+          <Space wrap size={4}>
             {renderStatusTag()}
             {activeSource === 'build' && (
-              <Button
-                size="small"
-                disabled={buildStatus !== 'RUNNING' || buildCancelling}
-                onClick={() => void cancelBuild()}
-              >
-                停止
-              </Button>
+              <Tooltip title="停止构建">
+                <Button
+                  size="small"
+                  danger
+                  type="text"
+                  disabled={buildStatus !== 'RUNNING' || buildCancelling}
+                  icon={<PauseCircleOutlined />}
+                  onClick={() => void cancelBuild()}
+                />
+              </Tooltip>
             )}
             {activeSource === 'build' && (
-              <Button size="small" onClick={clearLogs}>
-                清空
-              </Button>
+              <Tooltip title="清空日志">
+                <Button size="small" type="text" icon={<DeleteOutlined />} onClick={clearLogs} />
+              </Tooltip>
             )}
-            <Button
-              size="small"
-              disabled={currentLogCount === 0}
-              onClick={copyLogs}
-            >
-              复制
-            </Button>
-            <Button size="small" type={autoScroll ? 'primary' : 'default'} onClick={() => setAutoScroll((value) => !value)}>
-              自动滚动
-            </Button>
+            <Tooltip title="复制日志">
+              <Button
+                size="small"
+                type="text"
+                disabled={currentLogCount === 0}
+                icon={<CopyOutlined />}
+                onClick={copyLogs}
+              />
+            </Tooltip>
+            <Tooltip title={autoScroll ? '关闭自动滚动' : '开启自动滚动'}>
+              <Button
+                size="small"
+                type={autoScroll ? 'primary' : 'text'}
+                icon={<PlayCircleOutlined />}
+                onClick={() => setAutoScroll((value) => !value)}
+              />
+            </Tooltip>
             <Tooltip title="放大查看">
               <Button
                 aria-label="放大查看日志"
                 icon={<FullscreenOutlined />}
                 size="small"
+                type="text"
                 onClick={() => setExpanded(true)}
               />
             </Tooltip>
@@ -324,7 +347,7 @@ export function BuildLogPanel() {
       >
         <Radio.Group
           value={activeSource}
-          onChange={(event) => setActiveSource(event.target.value)}
+          onChange={(event) => setActiveSourceLocal(event.target.value)}
           size="small"
           style={{ marginBottom: 8 }}
         >
@@ -356,61 +379,54 @@ export function BuildLogPanel() {
         </Modal>
       </Card>
 
-      {activeSource === 'build' && (
+      {activeSource === 'build' && diagnosis && (
         <Card
           title="诊断面板"
           className="panel-card diagnosis-card"
           size="small"
           extra={
-            <Button
-              size="small"
-              icon={<CopyOutlined />}
-              disabled={!diagnosis}
-              onClick={copyDiagnosis}
-            >
-              复制诊断结果
-            </Button>
+            <Tooltip title="复制诊断结果">
+              <Button
+                size="small"
+                type="text"
+                icon={<CopyOutlined />}
+                onClick={copyDiagnosis}
+              />
+            </Tooltip>
           }
         >
-          {diagnosis ? (
-            <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <Space size={8} wrap>
-                <Tag color="error">{diagnosisCategoryText[diagnosis.category]}</Tag>
-                <Text strong>{diagnosis.summary}</Text>
-              </Space>
-              <div className="diagnosis-grid">
-                <div>
-                  <Text strong>可能原因</Text>
-                  <List
-                    size="small"
-                    dataSource={diagnosis.possibleCauses}
-                    renderItem={(item) => <List.Item>{item}</List.Item>}
-                  />
-                </div>
-                <div>
-                  <Text strong>建议动作</Text>
-                  <List
-                    size="small"
-                    dataSource={diagnosis.suggestedActions}
-                    renderItem={(item) => <List.Item>{item}</List.Item>}
-                  />
-                </div>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Space size={8} wrap>
+              <Tag color="error">{diagnosisCategoryText[diagnosis.category]}</Tag>
+              <Text strong>{diagnosis.summary}</Text>
+            </Space>
+            <div className="diagnosis-grid">
+              <div>
+                <Text strong>可能原因</Text>
+                <List
+                  size="small"
+                  dataSource={diagnosis.possibleCauses}
+                  renderItem={(item) => <List.Item>{item}</List.Item>}
+                />
               </div>
               <div>
-                <Text strong>高价值关键字行</Text>
-                <div className="diagnosis-keyword-lines">
-                  {diagnosis.keywordLines.slice(0, 6).map((line, index) => (
-                    <pre key={`${diagnosis.id}-${index}`}>{line}</pre>
-                  ))}
-                </div>
+                <Text strong>建议动作</Text>
+                <List
+                  size="small"
+                  dataSource={diagnosis.suggestedActions}
+                  renderItem={(item) => <List.Item>{item}</List.Item>}
+                />
               </div>
-            </Space>
-          ) : (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={buildStatus === 'FAILED' ? '暂无可用诊断' : '构建失败后自动生成诊断'}
-            />
-          )}
+            </div>
+            <div>
+              <Text strong>高价值关键字行</Text>
+              <div className="diagnosis-keyword-lines">
+                {diagnosis.keywordLines.slice(0, 6).map((line, index) => (
+                  <pre key={`${diagnosis.id}-${index}`}>{line}</pre>
+                ))}
+              </div>
+            </div>
+          </Space>
         </Card>
       )}
     </Space>

@@ -39,6 +39,7 @@ pub fn run() {
             commands::build::cancel_build,
             commands::filesystem::open_path_in_explorer,
             commands::filesystem::scan_build_artifacts,
+            commands::filesystem::delete_build_artifact,
             commands::git::check_git_status,
             commands::git::fetch_git_updates,
             commands::git::pull_git_updates,
@@ -63,6 +64,8 @@ pub fn run() {
             commands::deployment::list_deployment_tasks,
             commands::deployment::start_deployment,
             commands::deployment::cancel_deployment,
+            commands::deployment::delete_deployment_task,
+            commands::task_pipeline::delete_task_pipeline_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

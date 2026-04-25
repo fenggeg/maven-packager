@@ -162,6 +162,48 @@ export interface BuildArtifact {
   modulePath: string
 }
 
+export type DeploymentEnvironmentKind = 'test' | 'staging' | 'production' | 'custom'
+
+export interface ServiceMapping {
+  id: string
+  moduleId: string
+  serviceName: string
+  artifactPattern: string
+  deploymentProfileId?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface DeploymentEnvironment {
+  id: string
+  name: string
+  kind: DeploymentEnvironmentKind
+  serverId: string
+  status: 'unknown' | 'idle' | 'deploying' | 'healthy' | 'failed'
+  updatedAt?: string
+}
+
+export interface DeploymentConfiguration {
+  id: string
+  serviceMappingId: string
+  environmentId: string
+  deploymentProfileId: string
+  serverId: string
+  remoteDeployPath: string
+  artifactPattern: string
+  healthCheckEnabled: boolean
+  updatedAt?: string
+}
+
+export interface ModuleArtifactServiceLink {
+  moduleId: string
+  artifactPath?: string
+  artifactName?: string
+  serviceMappingId?: string
+  environmentId?: string
+  deploymentConfigurationId?: string
+}
+
 export interface BuildCommandPayload {
   options: BuildOptions
   environment: BuildEnvironment
@@ -331,20 +373,32 @@ export interface SaveServerProfilePayload {
   group?: string
 }
 
+export type DeploymentCustomCommandStage =
+  | 'before_stop'
+  | 'stop'
+  | 'after_stop'
+  | 'replace'
+  | 'after_replace'
+  | 'start'
+  | 'after_start'
+  | 'health_check'
+  | 'after_health'
+
+export interface DeploymentCustomCommand {
+  id: string
+  name: string
+  command: string
+  enabled: boolean
+  stage: DeploymentCustomCommandStage
+}
+
 export interface DeploymentProfile {
   id: string
   name: string
   moduleId: string
   localArtifactPattern: string
   remoteDeployPath: string
-  stopCommand?: string
-  stopCommandEnabled: boolean
-  startCommand?: string
-  startCommandEnabled: boolean
-  restartCommand?: string
-  restartCommandEnabled: boolean
-  healthCheckUrl?: string
-  healthCheckEnabled: boolean
+  customCommands: DeploymentCustomCommand[]
   createdAt?: string
   updatedAt?: string
 }

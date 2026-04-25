@@ -93,6 +93,14 @@ pub fn list_pipeline_runs(app: &AppHandle) -> AppResult<Vec<TaskPipelineRun>> {
     Ok(runs)
 }
 
+pub fn delete_pipeline_run(app: &AppHandle, run_id: &str) -> AppResult<()> {
+    let connection = open_database(app)?;
+    connection
+        .execute("DELETE FROM task_pipeline_runs WHERE id = ?1", params![run_id])
+        .map_err(|error| format!("无法删除任务执行记录：{}", error))?;
+    Ok(())
+}
+
 pub fn save_pipeline_run(app: &AppHandle, run: TaskPipelineRun) -> AppResult<()> {
     let connection = open_database(app)?;
     let payload = serde_json::to_string(&run)

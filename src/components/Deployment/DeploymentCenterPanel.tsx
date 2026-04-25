@@ -15,24 +15,35 @@ import {
     Tag,
     Typography,
 } from 'antd'
-import {DeleteOutlined, PlayCircleOutlined, SaveOutlined, StopOutlined} from '@ant-design/icons'
-import {useMemo, useState} from 'react'
+import {
+    CloudServerOutlined,
+    DeleteOutlined,
+    DeploymentUnitOutlined,
+    HistoryOutlined,
+    InboxOutlined,
+    MinusCircleOutlined,
+    PlayCircleOutlined,
+    PlusOutlined,
+    SaveOutlined,
+    StopOutlined,
+} from '@ant-design/icons'
+import {useEffect, useMemo, useState} from 'react'
+import {TaskPipelinePanel} from '../TaskPipeline/TaskPipelinePanel'
+import {findDeployableArtifacts, flattenModules, moduleLabel,} from '../../services/deploymentTopologyService'
 import {selectLocalFile} from '../../services/tauri-api'
 import {useAppStore} from '../../store/useAppStore'
+import {useNavigationStore} from '../../store/navigationStore'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
 import type {
     BuildArtifact,
+    DeploymentCustomCommand,
     DeploymentProfile,
     DeploymentStage,
-    MavenModule,
     SaveServerProfilePayload,
     ServerProfile,
 } from '../../types/domain'
 
 const {Text} = Typography
-
-const flattenModules = (modules: MavenModule[]): MavenModule[] =>
-  modules.flatMap((module) => [module, ...flattenModules(module.children ?? [])])
 
 const createServerDraft = (): SaveServerProfilePayload => ({
   name: '',
@@ -51,14 +62,7 @@ const createDeploymentDraft = (): DeploymentProfile => ({
   moduleId: '',
   localArtifactPattern: '*.jar',
   remoteDeployPath: '',
-  stopCommand: '',
-  stopCommandEnabled: false,
-  startCommand: '',
-  startCommandEnabled: false,
-  restartCommand: '',
-  restartCommandEnabled: false,
-  healthCheckUrl: '',
-  healthCheckEnabled: false,
+  customCommands: [],
 })
 
 const deploymentStageStatus = (status: DeploymentStage['status']) => {
@@ -112,12 +116,6 @@ const deploymentProgressCurrent = (stages: DeploymentStage[]) => {
   return Math.max(stages.length - 1, 0)
 }
 
-const globToRegex = (pattern: string) =>
-  new RegExp(`^${pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
-    .replace(/\?/g, '.')}$`, 'i')
-
 const collectArtifacts = (currentArtifacts: BuildArtifact[], historyArtifacts: BuildArtifact[]) => {
   const all = [...currentArtifacts, ...historyArtifacts]
   const seen = new Set<string>()
@@ -132,8 +130,6 @@ const collectArtifacts = (currentArtifacts: BuildArtifact[], historyArtifacts: B
 
 const normalizePath = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 
-const normalizeModulePath = (value?: string) => (value ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-
 export function DeploymentCenterPanel() {
   const project = useAppStore((state) => state.project)
   const artifacts = useAppStore((state) => state.artifacts)
@@ -144,6 +140,7 @@ export function DeploymentCenterPanel() {
   const error = useWorkflowStore((state) => state.error)
   const serverProfiles = useWorkflowStore((state) => state.serverProfiles)
   const deploymentProfiles = useWorkflowStore((state) => state.deploymentProfiles)
+  const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
   const currentDeploymentTask = useWorkflowStore((state) => state.currentDeploymentTask)
   const saveServerProfile = useWorkflowStore((state) => state.saveServerProfile)
   const deleteServerProfile = useWorkflowStore((state) => state.deleteServerProfile)
@@ -156,6 +153,18 @@ export function DeploymentCenterPanel() {
   const [selectedDeploymentProfileId, setSelectedDeploymentProfileId] = useState<string>()
   const [selectedServerId, setSelectedServerId] = useState<string>()
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string>()
+  const deploymentPreselectProfileId = useNavigationStore((state) => state.deploymentPreselectProfileId)
+  const clearDeploymentPreselect = useNavigationStore((state) => state.clearDeploymentPreselect)
+
+  useEffect(() => {
+    if (deploymentPreselectProfileId) {
+      const id = deploymentPreselectProfileId
+      requestAnimationFrame(() => {
+        setSelectedDeploymentProfileId(id)
+        clearDeploymentPreselect()
+      })
+    }
+  }, [deploymentPreselectProfileId, clearDeploymentPreselect])
 
   const projectRoot = project?.rootPath ?? ''
   const modules = useMemo(() => flattenModules(project?.modules ?? []), [project?.modules])
@@ -187,24 +196,16 @@ export function DeploymentCenterPanel() {
     ? buildOptions.goals
     : Array.from(new Set([...(buildOptions.goals.length > 0 ? buildOptions.goals : ['clean']), 'package']))
   const artifactOptions = useMemo(() => {
-    const pattern = selectedProfile?.localArtifactPattern?.trim()
-    const matcher = pattern ? globToRegex(pattern) : undefined
-    const modulePath = selectedProfileModule
-      ? normalizeModulePath(selectedProfileModule.relativePath)
-      : undefined
-
-    if (selectedProfile?.moduleId && !selectedProfileModule) {
+    if (!selectedProfile || (selectedProfile.moduleId && !selectedProfileModule)) {
       return []
     }
 
-    return artifactPool
-      .filter((artifact) => !matcher || matcher.test(artifact.fileName))
-      .filter((artifact) => modulePath === undefined || normalizeModulePath(artifact.modulePath) === modulePath)
+    return findDeployableArtifacts(artifactPool, selectedProfile, modules)
       .map((artifact) => ({
         label: `${artifact.fileName}${artifact.modulePath ? ` · ${artifact.modulePath}` : ''}`,
         value: artifact.path,
       }))
-  }, [artifactPool, selectedProfile?.localArtifactPattern, selectedProfile?.moduleId, selectedProfileModule])
+  }, [artifactPool, modules, selectedProfile, selectedProfileModule])
   const showPackageArtifactHint = Boolean(selectedProfile && !selectedProfileModuleMissing && artifactOptions.length === 0)
   const packageTargetLabel = selectedProfileModule?.artifactId ?? '当前项目'
   const buildOptionSummary = [
@@ -212,6 +213,27 @@ export function DeploymentCenterPanel() {
     buildOptions.alsoMake ? '同时构建依赖' : '仅目标模块',
     buildOptions.skipTests ? '跳过测试' : '执行测试',
   ].join('；')
+  const recentArtifacts = artifactPool.slice(0, 5)
+  const recentDeployments = deploymentTasks.slice(0, 5)
+  const deploymentSuccessCount = deploymentTasks.filter((task) => task.status === 'success').length
+  const runningDeploymentCount = deploymentTasks.filter((task) => !deploymentTaskFinished(task.status)).length
+  const topologyRows = deploymentProfiles.slice(0, 6)
+  const serverStatus = (serverId: string) => {
+    const latestTask = deploymentTasks.find((task) => task.serverId === serverId)
+    if (!latestTask) {
+      return {label: '空闲', color: 'default'}
+    }
+    if (latestTask.status === 'success') {
+      return {label: '最近成功', color: 'green'}
+    }
+    if (latestTask.status === 'failed') {
+      return {label: '最近失败', color: 'red'}
+    }
+    if (latestTask.status === 'cancelled') {
+      return {label: '已停止', color: 'orange'}
+    }
+    return {label: '部署中', color: 'processing'}
+  }
 
   const openServer = (profile: ServerProfile) => {
     setServerDraft({
@@ -246,8 +268,158 @@ export function DeploymentCenterPanel() {
         <Tabs
           items={[
             {
+              key: 'overview',
+              label: '首页',
+              children: (
+                <Space direction="vertical" size={16} style={{width: '100%'}}>
+                  <div className="deployment-summary-grid">
+                    <div className="deployment-summary-tile">
+                      <InboxOutlined className="deployment-summary-icon" />
+                      <div>
+                        <Text type="secondary">最近产物</Text>
+                        <div className="deployment-summary-number">{recentArtifacts.length}</div>
+                      </div>
+                    </div>
+                    <div className="deployment-summary-tile">
+                      <HistoryOutlined className="deployment-summary-icon" />
+                      <div>
+                        <Text type="secondary">最近部署</Text>
+                        <div className="deployment-summary-number">{deploymentTasks.length}</div>
+                        <Text type="secondary">{deploymentSuccessCount} 次成功</Text>
+                      </div>
+                    </div>
+                    <div className="deployment-summary-tile">
+                      <CloudServerOutlined className="deployment-summary-icon" />
+                      <div>
+                        <Text type="secondary">环境状态</Text>
+                        <div className="deployment-summary-number">{serverProfiles.length}</div>
+                        <Text type="secondary">{runningDeploymentCount > 0 ? `${runningDeploymentCount} 个部署中` : '无运行中部署'}</Text>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="deployment-overview-grid">
+                    <div className="deployment-overview-block">
+                      <Space size={8} className="deployment-overview-heading">
+                        <InboxOutlined />
+                        <Text strong>最近产物</Text>
+                      </Space>
+                      {recentArtifacts.length === 0 ? (
+                        <Empty description="暂无构建产物" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                      ) : (
+                        <List
+                          size="small"
+                          dataSource={recentArtifacts}
+                          renderItem={(artifact) => (
+                            <List.Item>
+                              <Space direction="vertical" size={0} className="artifact-item">
+                                <Text strong ellipsis title={artifact.fileName}>{artifact.fileName}</Text>
+                                <Text type="secondary" className="artifact-meta">
+                                  {artifact.modulePath || '根项目'} · {(artifact.sizeBytes / 1024 / 1024).toFixed(2)} MB
+                                </Text>
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      )}
+                    </div>
+
+                    <div className="deployment-overview-block">
+                      <Space size={8} className="deployment-overview-heading">
+                        <HistoryOutlined />
+                        <Text strong>最近部署</Text>
+                      </Space>
+                      {recentDeployments.length === 0 ? (
+                        <Empty description="暂无部署记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                      ) : (
+                        <List
+                          size="small"
+                          dataSource={recentDeployments}
+                          renderItem={(task) => (
+                            <List.Item>
+                              <Space direction="vertical" size={0} className="artifact-item">
+                                <Space size={8} wrap>
+                                  <Tag color={deploymentTaskColor(task.status)}>{deploymentTaskLabel(task.status)}</Tag>
+                                  <Text strong>{task.deploymentProfileName ?? task.deploymentProfileId}</Text>
+                                </Space>
+                                <Text type="secondary" className="artifact-meta">
+                                  {task.serverName ?? task.serverId} · {task.artifactName}
+                                </Text>
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="deployment-overview-block">
+                    <Space size={8} className="deployment-overview-heading">
+                      <CloudServerOutlined />
+                      <Text strong>环境状态</Text>
+                    </Space>
+                    {serverProfiles.length === 0 ? (
+                      <Empty description="暂无环境服务器" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    ) : (
+                      <List
+                        size="small"
+                        dataSource={serverProfiles}
+                        renderItem={(server) => {
+                          const status = serverStatus(server.id)
+                          return (
+                            <List.Item>
+                              <Space size={8} wrap>
+                                <Tag color={status.color}>{status.label}</Tag>
+                                <Text strong>{server.name}</Text>
+                                <Text type="secondary">
+                                  {server.group || '默认环境'} · {server.username}@{server.host}:{server.port}
+                                </Text>
+                              </Space>
+                            </List.Item>
+                          )
+                        }}
+                      />
+                    )}
+                  </div>
+
+                  <div className="deployment-overview-block">
+                    <Space size={8} className="deployment-overview-heading">
+                      <DeploymentUnitOutlined />
+                      <Text strong>模块 → 产物 → 服务 → 环境 → 部署配置</Text>
+                    </Space>
+                    {topologyRows.length === 0 ? (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="尚未建立服务映射"
+                        description="在“服务映射”中绑定模块、产物规则和部署配置后，构建成功即可进入部署。"
+                      />
+                    ) : (
+                      <List
+                        size="small"
+                        dataSource={topologyRows}
+                        renderItem={(profile) => (
+                          <List.Item>
+                            <Space direction="vertical" size={2} className="artifact-item">
+                              <Space size={8} wrap>
+                                <Tag>{moduleLabel(modules, profile.moduleId)}</Tag>
+                                <Text strong>{profile.name}</Text>
+                              </Space>
+                              <Text type="secondary" className="artifact-meta">
+                                {profile.localArtifactPattern} → {profile.name} → 环境服务器 → {profile.remoteDeployPath || '未配置远端目录'}
+                              </Text>
+                            </Space>
+                          </List.Item>
+                        )}
+                      />
+                    )}
+                  </div>
+                </Space>
+              ),
+            },
+            {
               key: 'server',
-              label: '服务器管理',
+              label: '环境资源',
               children: (
                 <Space direction="vertical" size={16} style={{width: '100%'}}>
                   <Space wrap>
@@ -355,11 +527,11 @@ export function DeploymentCenterPanel() {
             },
             {
               key: 'profile',
-              label: '部署配置',
+              label: '服务映射',
               children: (
                 <Space direction="vertical" size={16} style={{width: '100%'}}>
                   <Input
-                    addonBefore="名称"
+                    addonBefore="服务名称"
                     value={deploymentDraft.name}
                     onChange={(event) => setDeploymentDraft((state) => ({...state, name: event.target.value}))}
                   />
@@ -386,72 +558,81 @@ export function DeploymentCenterPanel() {
                     value={deploymentDraft.remoteDeployPath}
                     onChange={(event) => setDeploymentDraft((state) => ({...state, remoteDeployPath: event.target.value}))}
                   />
-                  <Space direction="vertical" size={8} style={{width: '100%'}}>
-                    <Checkbox
-                      checked={deploymentDraft.stopCommandEnabled}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, stopCommandEnabled: event.target.checked}))}
-                    >
-                      执行停止命令
-                    </Checkbox>
-                    <Input
-                      disabled={!deploymentDraft.stopCommandEnabled}
-                      placeholder="停止命令"
-                      value={deploymentDraft.stopCommand}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, stopCommand: event.target.value}))}
-                    />
-                  </Space>
-                  <Space direction="vertical" size={8} style={{width: '100%'}}>
-                    <Checkbox
-                      checked={deploymentDraft.startCommandEnabled}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, startCommandEnabled: event.target.checked}))}
-                    >
-                      执行启动命令
-                    </Checkbox>
-                    <Input
-                      disabled={!deploymentDraft.startCommandEnabled}
-                      placeholder="启动命令"
-                      value={deploymentDraft.startCommand}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, startCommand: event.target.value}))}
-                    />
-                  </Space>
-                  <Space direction="vertical" size={8} style={{width: '100%'}}>
-                    <Checkbox
-                      checked={deploymentDraft.restartCommandEnabled}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, restartCommandEnabled: event.target.checked}))}
-                    >
-                      执行重启命令
-                    </Checkbox>
-                    <Input
-                      disabled={!deploymentDraft.restartCommandEnabled}
-                      placeholder="重启命令（启用时优先于启动命令）"
-                      value={deploymentDraft.restartCommand}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, restartCommand: event.target.value}))}
-                    />
-                  </Space>
-                  <Space direction="vertical" size={8} style={{width: '100%'}}>
-                    <Checkbox
-                      checked={deploymentDraft.healthCheckEnabled}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, healthCheckEnabled: event.target.checked}))}
-                    >
-                      执行健康检查
-                    </Checkbox>
-                    <Input
-                      disabled={!deploymentDraft.healthCheckEnabled}
-                      placeholder="URL 或远端命令，例如 http://127.0.0.1:8080/actuator/health / uname -r"
-                      value={deploymentDraft.healthCheckUrl}
-                      onChange={(event) => setDeploymentDraft((state) => ({...state, healthCheckUrl: event.target.value}))}
-                    />
-                  </Space>
+                  <Card title="部署步骤命令" size="small" className="panel-card">
+                    <Space direction="vertical" size={12} style={{width: '100%'}}>
+                      {deploymentDraft.customCommands.map((cmd, index) => (
+                        <Space key={cmd.id} wrap style={{width: '100%'}} align="start">
+                          <Checkbox
+                            checked={cmd.enabled}
+                            onChange={(event) => {
+                              const next = [...deploymentDraft.customCommands]
+                              next[index] = {...cmd, enabled: event.target.checked}
+                              setDeploymentDraft((state) => ({...state, customCommands: next}))
+                            }}
+                          />
+                          <Input
+                            placeholder="命令名称"
+                            style={{width: 140}}
+                            value={cmd.name}
+                            onChange={(event) => {
+                              const next = [...deploymentDraft.customCommands]
+                              next[index] = {...cmd, name: event.target.value}
+                              setDeploymentDraft((state) => ({...state, customCommands: next}))
+                            }}
+                          />
+                          <Input
+                            placeholder="远端命令或 URL"
+                            style={{minWidth: 280, flex: 1}}
+                            value={cmd.command}
+                            onChange={(event) => {
+                              const next = [...deploymentDraft.customCommands]
+                              next[index] = {...cmd, command: event.target.value}
+                              setDeploymentDraft((state) => ({...state, customCommands: next}))
+                            }}
+                          />
+                          <Button
+                            type="text"
+                            danger
+                            icon={<MinusCircleOutlined />}
+                            onClick={() => {
+                              const next = deploymentDraft.customCommands.filter((_, i) => i !== index)
+                              setDeploymentDraft((state) => ({...state, customCommands: next}))
+                            }}
+                          />
+                        </Space>
+                      ))}
+                      <Button
+                        type="dashed"
+                        icon={<PlusOutlined />}
+                        onClick={() => {
+                          const next: DeploymentCustomCommand[] = [
+                            ...deploymentDraft.customCommands,
+                            {
+                              id: crypto.randomUUID(),
+                              name: '',
+                              command: '',
+                              enabled: true,
+                              stage: 'after_replace',
+                            },
+                          ]
+                          setDeploymentDraft((state) => ({...state, customCommands: next}))
+                        }}
+                      >
+                        添加命令
+                      </Button>
+                    </Space>
+                  </Card>
+
                   <Space wrap>
                     <Button type="primary" icon={<SaveOutlined />} onClick={() => void saveDeploymentProfile(deploymentDraft)}>
-                      保存部署配置
+                      保存服务映射
                     </Button>
                     <Button onClick={() => setDeploymentDraft(createDeploymentDraft())}>
-                      新建配置
+                      新建映射
                     </Button>
                   </Space>
                   {deploymentProfiles.length === 0 ? (
-                    <Empty description="暂无部署配置" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    <Empty description="暂无服务映射" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                   ) : (
                     <List
                       bordered
@@ -464,7 +645,7 @@ export function DeploymentCenterPanel() {
                             </Button>,
                             <Popconfirm
                               key="delete"
-                              title="删除部署配置？"
+                              title="删除服务映射？"
                               okText="删除"
                               cancelText="取消"
                               onConfirm={() => void deleteDeploymentProfile(profile.id)}
@@ -473,13 +654,16 @@ export function DeploymentCenterPanel() {
                             </Popconfirm>,
                           ]}
                         >
-                          <Space direction="vertical" size={2}>
+                            <Space direction="vertical" size={2}>
                             <Text strong>{profile.name}</Text>
                             <Text type="secondary">
                               模块：{profile.moduleId ? (moduleById.get(profile.moduleId)?.artifactId ?? '当前项目不存在该模块') : '未绑定'}
                             </Text>
                             <Text type="secondary">{profile.remoteDeployPath}</Text>
                             <Text type="secondary">匹配：{profile.localArtifactPattern}</Text>
+                            <Text type="secondary">
+                              命令：{profile.customCommands.filter((c) => c.enabled).length} 条启用
+                            </Text>
                           </Space>
                         </List.Item>
                       )}
@@ -490,11 +674,11 @@ export function DeploymentCenterPanel() {
             },
             {
               key: 'run',
-              label: '一键部署',
+              label: '部署执行',
               children: (
                 <Space direction="vertical" size={16} style={{width: '100%'}}>
                   <Select
-                    placeholder="选择部署配置"
+                    placeholder="选择服务映射"
                     style={{minWidth: 260}}
                     value={selectedDeploymentProfileId}
                     options={deploymentProfiles.map((item) => ({label: item.name, value: item.id}))}
@@ -512,7 +696,7 @@ export function DeploymentCenterPanel() {
                       value: item.id,
                     }))}
                     onChange={setSelectedServerId}
-                    notFoundContent="请先在服务器管理中添加服务器"
+                    notFoundContent="请先在环境资源中添加服务器"
                   />
                   <Select
                     placeholder="选择构建产物（来自配置绑定模块）"
@@ -523,9 +707,9 @@ export function DeploymentCenterPanel() {
                     notFoundContent={
                       selectedProfile
                         ? selectedProfileModuleMissing
-                          ? '部署配置绑定的模块不在当前项目中'
+                          ? '服务映射绑定的模块不在当前项目中'
                           : '当前项目没有匹配该模块和规则的本地产物'
-                        : '先选择部署配置'
+                        : '先选择服务映射'
                     }
                   />
                   {showPackageArtifactHint ? (
@@ -599,7 +783,7 @@ export function DeploymentCenterPanel() {
                     <Alert
                       type={selectedProfileModuleMissing ? 'warning' : 'info'}
                       showIcon
-                      message={`部署配置：${selectedProfile.name}`}
+                      message={`服务映射：${selectedProfile.name}`}
                       description={`模块：${selectedProfileModule?.artifactId ?? (selectedProfile.moduleId ? '当前项目不存在该模块' : '未绑定')}；目标目录：${selectedProfile.remoteDeployPath}；匹配规则：${selectedProfile.localArtifactPattern}${selectedServer ? `；服务器：${selectedServer.name}` : ''}`}
                     />
                   ) : null}
@@ -627,6 +811,11 @@ export function DeploymentCenterPanel() {
                   ) : null}
                 </Space>
               ),
+            },
+            {
+              key: 'automation',
+              label: '高级自动化',
+              children: <TaskPipelinePanel title="高级自动化模板" />,
             },
           ]}
         />

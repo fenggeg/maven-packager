@@ -49,6 +49,10 @@ interface WorkflowState {
   appendDeploymentLog: (event: DeploymentLogEvent) => void
   updateDeploymentTask: (task: DeploymentTask) => void
   finishDeploymentTask: (task: DeploymentTask) => void
+  deleteDeploymentTask: (taskId: string) => Promise<void>
+  rerunDeployment: (task: DeploymentTask) => Promise<void>
+  deleteTaskPipelineRun: (runId: string) => Promise<void>
+  rerunTaskPipeline: (run: TaskPipelineRun) => Promise<void>
 }
 
 const getErrorMessage = (error: unknown) =>
@@ -379,5 +383,45 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       currentDeploymentTask: task,
       deploymentTasks: sortDeploymentTasks([task, ...state.deploymentTasks.filter((item) => item.id !== task.id)]),
     }))
+  },
+
+  deleteDeploymentTask: async (taskId) => {
+    try {
+      await api.deleteDeploymentTask(taskId)
+      set((state) => ({
+        deploymentTasks: state.deploymentTasks.filter((item) => item.id !== taskId),
+      }))
+    } catch (error) {
+      set({error: getErrorMessage(error)})
+    }
+  },
+
+  rerunDeployment: async (task) => {
+    await get().startDeployment(
+      task.deploymentProfileId,
+      task.serverId,
+      task.artifactPath,
+      task.buildTaskId,
+    )
+  },
+
+  deleteTaskPipelineRun: async (runId) => {
+    try {
+      await api.deleteTaskPipelineRun(runId)
+      set((state) => ({
+        taskPipelineRuns: state.taskPipelineRuns.filter((item) => item.id !== runId),
+      }))
+    } catch (error) {
+      set({error: getErrorMessage(error)})
+    }
+  },
+
+  rerunTaskPipeline: async (run) => {
+    const pipeline = get().taskPipelines.find((p) => p.id === run.pipelineId)
+    if (!pipeline) {
+      set({error: '任务链模板已不存在，无法重跑。'})
+      return
+    }
+    await get().startTaskPipeline(pipeline)
   },
 }))

@@ -209,11 +209,20 @@ export const api = {
   cancelDeployment: (taskId: string) =>
     invoke<void>('cancel_deployment', { taskId }),
 
+  deleteDeploymentTask: (taskId: string) =>
+    invoke<void>('delete_deployment_task', { taskId }),
+
+  deleteTaskPipelineRun: (runId: string) =>
+    invoke<void>('delete_task_pipeline_run', { runId }),
+
   openPathInExplorer: (path: string) =>
     invoke<void>('open_path_in_explorer', { path }),
 
   scanBuildArtifacts: (projectRoot: string, modulePath: string) =>
     invoke<BuildArtifact[]>('scan_build_artifacts', { projectRoot, modulePath }),
+
+  deleteBuildArtifact: (path: string) =>
+    invoke<void>('delete_build_artifact', { path }),
 
   checkGitStatus: (rootPath: string) =>
     invoke<GitRepositoryStatus>('check_git_status', { rootPath }),

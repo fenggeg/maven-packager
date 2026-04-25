@@ -90,7 +90,11 @@ const pipelineStepStatus = (status: TaskStepRunStatus) => {
   }
 }
 
-export function TaskPipelinePanel() {
+interface TaskPipelinePanelProps {
+  title?: string
+}
+
+export function TaskPipelinePanel({title = '高级自动化模板'}: TaskPipelinePanelProps = {}) {
   const project = useAppStore((state) => state.project)
   const selectedModuleIds = useAppStore((state) => state.selectedModuleIds)
   const error = useWorkflowStore((state) => state.error)
@@ -180,18 +184,18 @@ export function TaskPipelinePanel() {
 
   return (
     <Space direction="vertical" size={12} style={{width: '100%'}}>
-      <Card title="任务编排" className="panel-card" size="small">
+      <Card title={title} className="panel-card" size="small">
         <Space direction="vertical" size={12} style={{width: '100%'}}>
           <Space wrap>
             <Select
-              placeholder="加载已有任务模板"
+              placeholder="加载自动化模板"
               style={{minWidth: 240}}
               value={taskPipelines.some((item) => item.id === editingPipeline.id) ? editingPipeline.id : undefined}
               options={taskPipelines.map((item) => ({label: item.name, value: item.id}))}
               onChange={selectPipeline}
             />
             <Button onClick={() => { setEditingPipeline(createPipeline(selectedModuleIds)); setCollapsedSteps(new Set()) }}>
-              新建任务链
+              新建模板
             </Button>
             <Button
               type="primary"
@@ -208,11 +212,11 @@ export function TaskPipelinePanel() {
               disabled={!editingPipeline.name.trim() || editingPipeline.steps.length === 0 || isRunning}
               onClick={() => void startTaskPipeline(editingPipeline)}
             >
-              执行任务链
+              执行模板
             </Button>
             {taskPipelines.some((item) => item.id === editingPipeline.id) ? (
               <Popconfirm
-                title="删除当前任务模板？"
+                title="删除当前自动化模板？"
                 okText="删除"
                 cancelText="取消"
                 onConfirm={() => void deleteTaskPipeline(editingPipeline.id)}
@@ -225,8 +229,8 @@ export function TaskPipelinePanel() {
           {error ? <Alert type="error" showIcon message={error} closable /> : null}
 
           <Input
-            addonBefore="任务链名称"
-            placeholder="例如：联调前构建 + 打开产物目录"
+            addonBefore="模板名称"
+            placeholder="例如：构建后通知 + 打开产物目录"
             value={editingPipeline.name}
             onChange={(event) => setEditingPipeline((state) => ({...state, name: event.target.value}))}
           />
@@ -248,10 +252,10 @@ export function TaskPipelinePanel() {
             <Text type="secondary" style={{fontSize: 12, marginBottom: 6, display: 'block'}}>添加步骤</Text>
             <Space wrap size={8}>
               <Button icon={<PlusOutlined />} onClick={() => setEditingPipeline((state) => ({...state, steps: [...state.steps, createStep('maven_goal')]}))}>
-                Maven Goal
+                构建后动作
               </Button>
               <Button icon={<PlusOutlined />} onClick={() => setEditingPipeline((state) => ({...state, steps: [...state.steps, createStep('shell_command')]}))}>
-                Shell Command
+                部署步骤
               </Button>
               <Button icon={<PlusOutlined />} onClick={() => setEditingPipeline((state) => ({...state, steps: [...state.steps, createStep('open_directory')]}))}>
                 打开目录

@@ -1,0 +1,318 @@
+import {CloudServerOutlined, DatabaseOutlined, RocketOutlined} from '@ant-design/icons'
+import {Button, Card, Descriptions, Empty, Input, Modal, Space, Table, Tag, Typography} from 'antd'
+import {useMemo, useState} from 'react'
+import {flattenModules, moduleLabel} from '../services/deploymentTopologyService'
+import {useAppStore} from '../store/useAppStore'
+import {useNavigationStore} from '../store/navigationStore'
+import {useWorkflowStore} from '../store/useWorkflowStore'
+import type {DeploymentTask} from '../types/domain'
+
+const {Title, Text} = Typography
+
+const statusColor: Record<DeploymentTask['status'], string> = {
+  pending: 'default',
+  uploading: 'processing',
+  stopping: 'orange',
+  starting: 'cyan',
+  checking: 'blue',
+  success: 'green',
+  failed: 'red',
+  cancelled: 'orange',
+}
+
+const statusLabel = (status: DeploymentTask['status']) => {
+  switch (status) {
+    case 'pending': return '等待中'
+    case 'uploading': return '上传中'
+    case 'stopping': return '停止中'
+    case 'starting': return '启动中'
+    case 'checking': return '检查中'
+    case 'success': return '成功'
+    case 'failed': return '失败'
+    case 'cancelled': return '已取消'
+    default: return status
+  }
+}
+
+const classifyLine = (line: string) => {
+  const lower = line.toLowerCase()
+  if (lower.includes('部署完成') || lower.includes('已替换') || lower.includes('健康检查通过')) {
+    return 'success'
+  }
+  if (lower.includes('停止')) {
+    return 'warning'
+  }
+  if (lower.includes('失败') || lower.includes('错误') || lower.includes('error')) {
+    return 'error'
+  }
+  return ''
+}
+
+export function ServicePage() {
+  const project = useAppStore((state) => state.project)
+  const modules = flattenModules(project?.modules ?? [])
+  const deploymentProfiles = useWorkflowStore((state) => state.deploymentProfiles)
+  const serverProfiles = useWorkflowStore((state) => state.serverProfiles)
+  const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
+  const deploymentLogsByTaskId = useWorkflowStore((state) => state.deploymentLogsByTaskId)
+  const navigateToDeployment = useNavigationStore((state) => state.navigateToDeployment)
+
+  const [openTask, setOpenTask] = useState<DeploymentTask>()
+  const [logKeyword, setLogKeyword] = useState('')
+  const [logExpanded, setLogExpanded] = useState(false)
+
+  const latestTaskMap = useMemo(() => {
+    const map = new Map<string, DeploymentTask>()
+    for (const task of deploymentTasks) {
+      const key = `${task.deploymentProfileId}:${task.serverId}`
+      const existing = map.get(key)
+      if (!existing || task.createdAt > existing.createdAt) {
+        map.set(key, task)
+      }
+    }
+    return map
+  }, [deploymentTasks])
+
+  const getLatestTask = (profileId: string, serverId: string) =>
+    latestTaskMap.get(`${profileId}:${serverId}`)
+
+  const runningCount = deploymentTasks.filter(
+    (t) => !['success', 'failed', 'cancelled'].includes(t.status)
+  ).length
+
+  const successCount = deploymentTasks.filter((t) => t.status === 'success').length
+  const failedCount = deploymentTasks.filter((t) => t.status === 'failed').length
+
+  const openTaskLogs = openTask ? (deploymentLogsByTaskId[openTask.id] ?? openTask.log ?? []) : []
+  const filteredLogs = logKeyword.trim()
+    ? openTaskLogs.filter((line) => line.toLowerCase().includes(logKeyword.trim().toLowerCase()))
+    : openTaskLogs
+
+  const renderLogContent = () =>
+    filteredLogs.length === 0 ? (
+      '暂无部署日志'
+    ) : (
+      filteredLogs.map((line, index) => (
+        <pre className={`log-line ${classifyLine(line)}`} key={`dlog-${index}`}>
+          {line}
+        </pre>
+      ))
+    )
+
+  return (
+    <main className="workspace-page">
+      <div className="workspace-heading">
+        <div>
+          <Title level={3}>服务部署总览</Title>
+          <Text type="secondary">一览所有服务在各服务器上的部署状态，快速查看日志或进入部署中心。</Text>
+        </div>
+      </div>
+
+      <Space size={12} wrap style={{marginBottom: 16}}>
+        <Tag icon={<DatabaseOutlined />} color="blue">服务 {deploymentProfiles.length}</Tag>
+        <Tag icon={<CloudServerOutlined />} color="purple">服务器 {serverProfiles.length}</Tag>
+        <Tag color="processing">运行中 {runningCount}</Tag>
+        <Tag color="green">成功 {successCount}</Tag>
+        <Tag color="red">失败 {failedCount}</Tag>
+      </Space>
+
+      {deploymentProfiles.length === 0 ? (
+        <Empty description="暂无服务配置，请先在部署中心添加服务映射" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <Space direction="vertical" size={16} style={{width: '100%'}}>
+          {deploymentProfiles.map((profile) => {
+            const moduleName = moduleLabel(modules, profile.moduleId)
+            return (
+              <Card
+                key={profile.id}
+                title={(
+                  <Space size={8}>
+                    <span>{profile.name}</span>
+                    <Tag size="small">{moduleName}</Tag>
+                  </Space>
+                )}
+                className="panel-card"
+                size="small"
+                extra={
+                  <Button
+                    size="small"
+                    icon={<RocketOutlined />}
+                    onClick={() => navigateToDeployment(profile.id)}
+                  >
+                    去部署
+                  </Button>
+                }
+              >
+                <Space direction="vertical" size={12} style={{width: '100%'}}>
+                  <Descriptions size="small" column={3}>
+                    <Descriptions.Item label="产物匹配">{profile.localArtifactPattern}</Descriptions.Item>
+                    <Descriptions.Item label="远程目录">{profile.remoteDeployPath}</Descriptions.Item>
+                    <Descriptions.Item label="命令">
+                      {profile.customCommands.filter((c) => c.enabled).length} 条启用
+                    </Descriptions.Item>
+                  </Descriptions>
+                  {serverProfiles.length === 0 ? (
+                    <Text type="secondary">暂无服务器配置</Text>
+                  ) : (
+                    <Table
+                      rowKey="serverId"
+                      size="small"
+                      pagination={false}
+                      dataSource={serverProfiles.map((server) => {
+                        const task = getLatestTask(profile.id, server.id)
+                        return {
+                          serverId: server.id,
+                          serverName: server.name,
+                          serverHost: `${server.username}@${server.host}:${server.port}`,
+                          task,
+                        }
+                      })}
+                      columns={[
+                        {
+                          title: '服务器',
+                          dataIndex: 'serverName',
+                          width: 140,
+                        },
+                        {
+                          title: '地址',
+                          dataIndex: 'serverHost',
+                          width: 200,
+                          ellipsis: true,
+                        },
+                        {
+                          title: '状态',
+                          width: 110,
+                          render: (_, record) => {
+                            const task = record.task
+                            if (!task) {
+                              return <Tag>未部署</Tag>
+                            }
+                            return <Tag color={statusColor[task.status]}>{statusLabel(task.status)}</Tag>
+                          },
+                        },
+                        {
+                          title: '最近部署',
+                          width: 170,
+                          render: (_, record) => {
+                            const task = record.task
+                            if (!task) {
+                              return <Text type="secondary">-</Text>
+                            }
+                            return new Date(task.createdAt).toLocaleString()
+                          },
+                        },
+                        {
+                          title: '产物',
+                          width: 160,
+                          ellipsis: true,
+                          render: (_, record) => record.task?.artifactName ?? '-',
+                        },
+                        {
+                          title: '操作',
+                          width: 100,
+                          render: (_, record) => (
+                            <Button
+                              size="small"
+                              disabled={!record.task}
+                              onClick={() => {
+                                if (record.task) {
+                                  setOpenTask(record.task)
+                                  setLogKeyword('')
+                                }
+                              }}
+                            >
+                              日志
+                            </Button>
+                          ),
+                        },
+                      ]}
+                      scroll={{x: 780}}
+                    />
+                  )}
+                </Space>
+              </Card>
+            )
+          })}
+        </Space>
+      )}
+
+      <Modal
+        title={openTask ? `部署日志 · ${openTask.deploymentProfileName ?? openTask.deploymentProfileId}` : '部署日志'}
+        open={Boolean(openTask)}
+        footer={null}
+        width={900}
+        onCancel={() => setOpenTask(undefined)}
+      >
+        {openTask ? (
+          <Space direction="vertical" size={16} style={{width: '100%'}}>
+            <Descriptions size="small" bordered column={2}>
+              <Descriptions.Item label="状态">
+                <Tag color={statusColor[openTask.status]}>{statusLabel(openTask.status)}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="服务器">
+                {openTask.serverName ?? openTask.serverId}
+              </Descriptions.Item>
+              <Descriptions.Item label="产物" span={2}>
+                {openTask.artifactName}
+              </Descriptions.Item>
+            </Descriptions>
+            <Table
+              style={{marginTop: 8}}
+              rowKey="key"
+              size="small"
+              pagination={false}
+              dataSource={openTask.stages}
+              columns={[
+                {title: '阶段', dataIndex: 'label', width: 140},
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 100,
+                  render: (value: string) => <Tag>{value}</Tag>,
+                },
+                {
+                  title: '结果',
+                  render: (_, stage) => stage.message ?? '-',
+                },
+              ]}
+            />
+            <Space wrap style={{marginTop: 8, marginBottom: 8}}>
+              <Input
+                allowClear
+                size="small"
+                placeholder="搜索日志"
+                style={{width: 200}}
+                value={logKeyword}
+                onChange={(event) => setLogKeyword(event.target.value)}
+              />
+              <Button
+                size="small"
+                disabled={openTaskLogs.length === 0}
+                onClick={() => void navigator.clipboard?.writeText(openTaskLogs.join('\n'))}
+              >
+                复制日志
+              </Button>
+              <Button size="small" onClick={() => setLogExpanded(true)}>
+                放大查看
+              </Button>
+            </Space>
+            <div className="workflow-log-panel">
+              {renderLogContent()}
+            </div>
+            <Modal
+              title={`部署日志 · ${openTask.deploymentProfileName ?? openTask.id}`}
+              open={logExpanded}
+              footer={null}
+              width="85vw"
+              onCancel={() => setLogExpanded(false)}
+            >
+              <div className="log-panel log-panel-large">
+                {renderLogContent()}
+              </div>
+            </Modal>
+          </Space>
+        ) : null}
+      </Modal>
+    </main>
+  )
+}

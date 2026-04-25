@@ -1,5 +1,5 @@
 use crate::error::{to_user_error, AppResult};
-use crate::models::deployment::{DeploymentStage, DeploymentTask, StartDeploymentPayload};
+use crate::models::deployment::{DeploymentCustomCommand, DeploymentStage, DeploymentTask, StartDeploymentPayload};
 use crate::repositories::deployment_repo;
 use crate::services::{health_check_service, ssh_transport_service::SshConnection};
 use chrono::Utc;
@@ -16,6 +16,12 @@ const STAGE_STOP: &str = "stop";
 const STAGE_REPLACE: &str = "replace";
 const STAGE_START: &str = "start";
 const STAGE_HEALTH: &str = "health";
+
+const PHASE_BEFORE_STOP: &str = "before_stop";
+const PHASE_AFTER_STOP: &str = "after_stop";
+const PHASE_AFTER_REPLACE: &str = "after_replace";
+const PHASE_AFTER_START: &str = "after_start";
+const PHASE_AFTER_HEALTH: &str = "after_health";
 
 #[derive(Clone, Default)]
 pub struct DeploymentControlState {
@@ -214,28 +220,29 @@ fn execute_deployment(
     append_log(app, &mut task, Some(STAGE_UPLOAD.to_string()), format!("产物已上传到 {}", remote_temp_path));
     emit_task_update(app, &task);
 
+    // before_stop custom commands
+    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_BEFORE_STOP, task_id);
+    if task.status == "failed" || task.status == "cancelled" {
+        return Ok(task);
+    }
+
     task.status = "stopping".to_string();
     emit_task_update(app, &task);
-    if let Some(command) = enabled_command(
-        profile.stop_command.as_deref(),
-        profile.stop_command_enabled,
-    ) {
-        if run_stage(app, &mut task, STAGE_STOP, || {
-            let result = conn.execute_with_cancel(command, || {
-                is_cancel_requested(app, task_id)
-            })?;
-            Ok(if result.output.is_empty() {
-                "停止命令执行完成".to_string()
-            } else {
-                result.output
-            })
-        })
-        .is_err()
+    let stop_commands = collect_stage_commands(&profile.custom_commands, STAGE_STOP);
+    if !stop_commands.is_empty() {
+        if run_custom_command_stage(app, &conn, &mut task, STAGE_STOP, &stop_commands, task_id)
+            .is_err()
         {
             return Ok(task);
         }
     } else {
-        skip_stage(app, &mut task, STAGE_STOP, "停止命令未启用或未配置，跳过。");
+        skip_stage(app, &mut task, STAGE_STOP, "停止命令未配置，跳过。");
+    }
+
+    // after_stop custom commands
+    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_STOP, task_id);
+    if task.status == "failed" || task.status == "cancelled" {
+        return Ok(task);
     }
 
     if run_stage(app, &mut task, STAGE_REPLACE, || {
@@ -259,58 +266,48 @@ fn execute_deployment(
         return Ok(task);
     }
 
+    // after_replace custom commands
+    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_REPLACE, task_id);
+    if task.status == "failed" || task.status == "cancelled" {
+        return Ok(task);
+    }
+
     task.status = "starting".to_string();
     emit_task_update(app, &task);
-    if let Some(command) = enabled_command(
-        profile.restart_command.as_deref(),
-        profile.restart_command_enabled,
-    )
-    .or_else(|| enabled_command(profile.start_command.as_deref(), profile.start_command_enabled))
-    {
-        if run_stage(app, &mut task, STAGE_START, || {
-            let result = conn.execute_with_cancel(command, || {
-                is_cancel_requested(app, task_id)
-            })?;
-            Ok(if result.output.is_empty() {
-                "启动命令执行完成".to_string()
-            } else {
-                result.output
-            })
-        })
-        .is_err()
+    let start_commands = collect_stage_commands(&profile.custom_commands, STAGE_START);
+    if !start_commands.is_empty() {
+        if run_custom_command_stage(app, &conn, &mut task, STAGE_START, &start_commands, task_id)
+            .is_err()
         {
             return Ok(task);
         }
     } else {
-        skip_stage(app, &mut task, STAGE_START, "启动/重启命令未启用或未配置，跳过。");
+        skip_stage(app, &mut task, STAGE_START, "启动命令未配置，跳过。");
+    }
+
+    // after_start custom commands
+    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_START, task_id);
+    if task.status == "failed" || task.status == "cancelled" {
+        return Ok(task);
     }
 
     task.status = "checking".to_string();
     emit_task_update(app, &task);
-    if let Some(health_check) = enabled_command(
-        profile.health_check_url.as_deref(),
-        profile.health_check_enabled,
-    ) {
-        if run_stage(app, &mut task, STAGE_HEALTH, || {
-            if is_http_url(health_check) {
-                health_check_service::check_health(health_check)
-            } else {
-                let result = conn.execute_with_cancel(health_check, || {
-                    is_cancel_requested(app, task_id)
-                })?;
-                Ok(if result.output.is_empty() {
-                    "健康检查命令执行完成".to_string()
-                } else {
-                    result.output
-                })
-            }
-        })
-        .is_err()
+    let health_commands = collect_stage_commands(&profile.custom_commands, STAGE_HEALTH);
+    if !health_commands.is_empty() {
+        if run_custom_command_stage(app, &conn, &mut task, STAGE_HEALTH, &health_commands, task_id)
+            .is_err()
         {
             return Ok(task);
         }
     } else {
-        skip_stage(app, &mut task, STAGE_HEALTH, "健康检查未启用或未配置，跳过。");
+        skip_stage(app, &mut task, STAGE_HEALTH, "健康检查未配置，跳过。");
+    }
+
+    // after_health custom commands
+    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_HEALTH, task_id);
+    if task.status == "failed" || task.status == "cancelled" {
+        return Ok(task);
     }
 
     task.status = "success".to_string();
@@ -496,11 +493,143 @@ fn normalize_remote_dir(value: &str) -> String {
     value.trim_end_matches('/').to_string()
 }
 
-fn enabled_command(command: Option<&str>, enabled: bool) -> Option<&str> {
-    command
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .filter(|_| enabled)
+fn collect_stage_commands<'a>(
+    commands: &'a [DeploymentCustomCommand],
+    stage: &str,
+) -> Vec<&'a DeploymentCustomCommand> {
+    commands
+        .iter()
+        .filter(|c| c.enabled && c.stage == stage && !c.command.trim().is_empty())
+        .collect()
+}
+
+fn run_custom_command_stage(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    stage_key: &str,
+    commands: &[&DeploymentCustomCommand],
+    task_id: &str,
+) -> AppResult<()> {
+    if finish_if_cancelled(app, task, stage_key) {
+        return Err(to_user_error("部署已停止。"));
+    }
+    update_stage(task, stage_key, "running", None);
+    emit_task_update(app, task);
+
+    for cmd in commands {
+        if is_cancel_requested(app, task_id) {
+            mark_cancelled(app, task, stage_key, "部署已停止。");
+            return Err(to_user_error("部署已停止。"));
+        }
+        append_log(
+            app,
+            task,
+            Some(stage_key.to_string()),
+            format!("[{}] 执行: {}", cmd.name, cmd.command),
+        );
+        let result = if is_http_url(&cmd.command) {
+            health_check_service::check_health(&cmd.command)
+        } else {
+            conn.execute_with_cancel(&cmd.command, || is_cancel_requested(app, task_id))
+                .map(|r| {
+                    if r.output.is_empty() {
+                        format!("[{}] 执行完成", cmd.name)
+                    } else {
+                        format!("[{}] 输出: {}", cmd.name, r.output)
+                    }
+                })
+        };
+        match result {
+            Ok(msg) => {
+                append_log(app, task, Some(stage_key.to_string()), msg);
+            }
+            Err(error) => {
+                if is_cancel_requested(app, task_id) {
+                    mark_cancelled(app, task, stage_key, "部署已停止。");
+                } else {
+                    update_stage(task, stage_key, "failed", Some(error.clone()));
+                    task.status = "failed".to_string();
+                    task.finished_at = Some(Utc::now().to_rfc3339());
+                    append_log(
+                        app,
+                        task,
+                        Some(stage_key.to_string()),
+                        format!("[{}] 执行失败: {}", cmd.name, error),
+                    );
+                    emit_task_update(app, task);
+                }
+                return Err(to_user_error(error));
+            }
+        }
+    }
+
+    update_stage(
+        task,
+        stage_key,
+        "success",
+        Some(format!("{} 条命令执行完成", commands.len())),
+    );
+    emit_task_update(app, task);
+    Ok(())
+}
+
+fn run_custom_commands(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    commands: &[DeploymentCustomCommand],
+    stage: &str,
+    task_id: &str,
+) {
+    let to_run = collect_stage_commands(commands, stage);
+    if to_run.is_empty() {
+        return;
+    }
+    for cmd in to_run {
+        if is_cancel_requested(app, task_id) {
+            mark_cancelled(app, task, STAGE_REPLACE, "部署已停止。");
+            return;
+        }
+        append_log(
+            app,
+            task,
+            None,
+            format!("[{}] 执行自定义命令: {}", cmd.name, cmd.command),
+        );
+        let result = if is_http_url(&cmd.command) {
+            health_check_service::check_health(&cmd.command).map_err(|e| e.to_string())
+        } else {
+            conn.execute_with_cancel(&cmd.command, || is_cancel_requested(app, task_id))
+                .map(|r| {
+                    if r.output.is_empty() {
+                        format!("[{}] 执行完成", cmd.name)
+                    } else {
+                        format!("[{}] 输出: {}", cmd.name, r.output)
+                    }
+                })
+        };
+        match result {
+            Ok(msg) => {
+                append_log(app, task, None, msg);
+            }
+            Err(error) => {
+                if is_cancel_requested(app, task_id) {
+                    mark_cancelled(app, task, STAGE_REPLACE, "部署已停止。");
+                } else {
+                    task.status = "failed".to_string();
+                    task.finished_at = Some(Utc::now().to_rfc3339());
+                    append_log(
+                        app,
+                        task,
+                        None,
+                        format!("[{}] 自定义命令执行失败: {}", cmd.name, error),
+                    );
+                }
+                return;
+            }
+        }
+    }
 }
 
 fn is_http_url(value: &str) -> bool {

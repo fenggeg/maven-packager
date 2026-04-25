@@ -147,3 +147,23 @@ pub fn cancel_deployment(app: AppHandle, task_id: String) -> AppResult<()> {
     );
     deployment_executor::cancel_deployment(app, task_id)
 }
+
+#[tauri::command]
+pub async fn delete_deployment_task(app: AppHandle, task_id: String) -> AppResult<()> {
+    app_logger::log_info(
+        &app,
+        "deployment.task.delete.start",
+        format!("task_id={}", task_id),
+    );
+    let task_app = app.clone();
+    let result =
+        blocking::run(move || deployment_repo::delete_deployment_task(&task_app, &task_id)).await;
+    if let Err(error) = &result {
+        app_logger::log_error(
+            &app,
+            "deployment.task.delete.failed",
+            format!("error={}", error),
+        );
+    }
+    result
+}

@@ -85,6 +85,7 @@ interface AppState {
   updateTemplate: (template: BuildTemplate) => Promise<void>
   applyTemplate: (template: BuildTemplate) => void
   deleteTemplate: (templateId: string) => Promise<void>
+  removeArtifact: (path: string) => Promise<void>
 }
 
 const findModule = (
@@ -988,5 +989,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteTemplate: async (templateId: string) => {
     await api.deleteTemplate(templateId)
     await get().loadHistoryAndTemplates()
+  },
+
+  removeArtifact: async (path: string) => {
+    await api.deleteBuildArtifact(path)
+    set((state) => ({
+      artifacts: state.artifacts.filter((artifact) => artifact.path !== path),
+      history: state.history.map((record) => ({
+        ...record,
+        artifacts: record.artifacts?.filter((artifact) => artifact.path !== path),
+      })),
+    }))
   },
 }))

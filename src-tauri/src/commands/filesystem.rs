@@ -216,6 +216,46 @@ fn is_package_file(path: &Path) -> bool {
     )
 }
 
+#[tauri::command]
+pub fn delete_build_artifact(app: AppHandle, path: String) -> AppResult<()> {
+    app_logger::log_info(
+        &app,
+        "filesystem.artifact.delete.start",
+        format!("path={}", path),
+    );
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        app_logger::log_error(
+            &app,
+            "filesystem.artifact.delete.failed",
+            format!("path={}, error=文件不存在", path),
+        );
+        return Err(to_user_error(format!("文件不存在：{}", path)));
+    }
+    if !target.is_file() {
+        app_logger::log_error(
+            &app,
+            "filesystem.artifact.delete.failed",
+            format!("path={}, error=路径不是文件", path),
+        );
+        return Err(to_user_error(format!("路径不是文件：{}", path)));
+    }
+    fs::remove_file(&target).map_err(|error| {
+        app_logger::log_error(
+            &app,
+            "filesystem.artifact.delete.failed",
+            format!("path={}, error={}", path, error),
+        );
+        to_user_error(format!("无法删除文件 {}：{}", path, error))
+    })?;
+    app_logger::log_info(
+        &app,
+        "filesystem.artifact.delete.success",
+        format!("path={}", path),
+    );
+    Ok(())
+}
+
 fn is_ignored_dir(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),

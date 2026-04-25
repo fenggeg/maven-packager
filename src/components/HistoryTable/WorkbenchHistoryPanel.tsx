@@ -14,7 +14,7 @@ export function WorkbenchHistoryPanel() {
         },
         {
           key: 'pipeline',
-          label: '任务执行',
+          label: '自动化执行',
           children: <TaskPipelineHistoryTable />,
         },
         {

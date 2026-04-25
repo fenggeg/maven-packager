@@ -81,7 +81,7 @@ export function TemplatePanel() {
             执行
           </Button>
           <Popconfirm
-            title="删除任务模板？"
+            title="删除自动化模板？"
             okText="删除"
             cancelText="取消"
             onConfirm={() => void deleteTaskPipeline(record.id)}
@@ -97,6 +97,17 @@ export function TemplatePanel() {
 
   const table = (large = false) => (
     <Tabs
+      tabBarExtraContent={
+        <Tooltip title="放大查看">
+          <Button
+            aria-label="放大查看模板"
+            icon={<FullscreenOutlined />}
+            size="small"
+            type="text"
+            onClick={() => setExpanded(true)}
+          />
+        </Tooltip>
+      }
       items={[
         {
           key: 'build',
@@ -114,7 +125,7 @@ export function TemplatePanel() {
         },
         {
           key: 'pipeline',
-          label: '任务模板',
+          label: '高级自动化模板',
           children: (
             <Table
               rowKey="id"
@@ -132,16 +143,6 @@ export function TemplatePanel() {
 
   return (
     <>
-      <div className="table-toolbar">
-        <Tooltip title="放大查看">
-          <Button
-            aria-label="放大查看模板"
-            icon={<FullscreenOutlined />}
-            size="small"
-            onClick={() => setExpanded(true)}
-          />
-        </Tooltip>
-      </div>
       {table()}
       <Modal
         title="模板"

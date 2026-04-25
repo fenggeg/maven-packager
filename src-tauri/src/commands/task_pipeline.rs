@@ -89,3 +89,23 @@ pub fn start_task_pipeline(app: AppHandle, payload: StartTaskPipelinePayload) ->
     );
     task_pipeline_executor::start_pipeline(app, payload)
 }
+
+#[tauri::command]
+pub async fn delete_task_pipeline_run(app: AppHandle, run_id: String) -> AppResult<()> {
+    app_logger::log_info(
+        &app,
+        "task_pipeline.run.delete.start",
+        format!("run_id={}", run_id),
+    );
+    let task_app = app.clone();
+    let result =
+        blocking::run(move || pipeline_repo::delete_pipeline_run(&task_app, &run_id)).await;
+    if let Err(error) = &result {
+        app_logger::log_error(
+            &app,
+            "task_pipeline.run.delete.failed",
+            format!("error={}", error),
+        );
+    }
+    result
+}

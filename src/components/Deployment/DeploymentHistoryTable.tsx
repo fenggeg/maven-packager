@@ -1,5 +1,5 @@
-import {Button, Descriptions, Empty, Input, Modal, Space, Table, Tag} from 'antd'
-import {CopyOutlined, FullscreenOutlined} from '@ant-design/icons'
+import {Button, Descriptions, Empty, Input, Modal, Popconfirm, Space, Table, Tag, Tooltip} from 'antd'
+import {CopyOutlined, DeleteOutlined, FullscreenOutlined, PlayCircleOutlined} from '@ant-design/icons'
 import type {ColumnsType} from 'antd/es/table'
 import {useMemo, useRef, useState} from 'react'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
@@ -33,6 +33,8 @@ const classifyLine = (line: string) => {
 export function DeploymentHistoryTable() {
   const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
   const deploymentLogsByTaskId = useWorkflowStore((state) => state.deploymentLogsByTaskId)
+  const deleteDeploymentTask = useWorkflowStore((state) => state.deleteDeploymentTask)
+  const rerunDeployment = useWorkflowStore((state) => state.rerunDeployment)
   const [openTask, setOpenTask] = useState<DeploymentTask>()
   const [logKeyword, setLogKeyword] = useState('')
   const [logExpanded, setLogExpanded] = useState(false)
@@ -71,11 +73,37 @@ export function DeploymentHistoryTable() {
     },
     {
       title: '操作',
-      width: 100,
+      width: 160,
       render: (_, record) => (
-        <Button size="small" onClick={() => { setOpenTask(record); setLogKeyword('') }}>
-          详情
-        </Button>
+        <Space wrap>
+          <Tooltip title="重跑部署">
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              onClick={() => void rerunDeployment(record)}
+            />
+          </Tooltip>
+          <Tooltip title="详情">
+            <Button
+              size="small"
+              icon={<FullscreenOutlined />}
+              onClick={() => { setOpenTask(record); setLogKeyword('') }}
+            />
+          </Tooltip>
+          <Popconfirm
+            title="删除部署记录？"
+            description="确定要删除这条部署记录吗？"
+            okText="删除"
+            okType="danger"
+            cancelText="取消"
+            onConfirm={() => void deleteDeploymentTask(record.id)}
+          >
+            <Tooltip title="删除">
+              <Button size="small" danger type="text" icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
       ),
     },
   ], [])

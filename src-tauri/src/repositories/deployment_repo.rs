@@ -254,6 +254,14 @@ pub fn save_deployment_task(app: &AppHandle, task: DeploymentTask) -> AppResult<
     Ok(())
 }
 
+pub fn delete_deployment_task(app: &AppHandle, task_id: &str) -> AppResult<()> {
+    let connection = open_database(app)?;
+    connection
+        .execute("DELETE FROM deployment_tasks WHERE id = ?1", params![task_id])
+        .map_err(|error| format!("无法删除部署记录：{}", error))?;
+    Ok(())
+}
+
 pub fn get_deployment_profile(app: &AppHandle, profile_id: &str) -> AppResult<DeploymentProfile> {
     let connection = open_database(app)?;
     let payload: String = connection
