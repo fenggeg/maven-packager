@@ -17,8 +17,7 @@ src/
 │  ├─ DeploymentPage.tsx
 │  ├─ EnvironmentPage.tsx
 │  ├─ HistoryPage.tsx
-│  ├─ ServicePage.tsx
-│  └─ SettingsPage.tsx
+│  └─ ServicePage.tsx
 ├─ store/
 │  └─ navigationStore.ts
 └─ components/
@@ -35,7 +34,7 @@ src/
 - `src/app/MainWorkspace.tsx`：新增页面路由容器。
 - `src/app/InspectorDrawer.tsx`：新增可折叠日志、诊断、详情面板。
 - `src/app/BottomActionBar.tsx`：新增固定底部构建操作栏。
-- `src/pages/*`：新增构建、产物、部署、服务、环境、历史、设置页面骨架。
+- `src/pages/*`：新增构建、产物、部署、服务、环境、历史页面骨架。
 - `src/store/navigationStore.ts`：新增布局和导航状态。
 
 ## 删除或迁移的旧 Tab
@@ -45,9 +44,7 @@ src/
 - 部署中心 Tab → `DeploymentPage`
 - 日志 Tab → `InspectorDrawer`
 - 历史 Tab → `HistoryPage`
-- 模板 Tab → `SettingsPage`
 - 高级参数 Tab → `BuildPage` 折叠区
-- 任务链/任务编排 → `SettingsPage` 高级自动化配置，并保留部署中心高级自动化入口
 
 ## 新 AppShell 实现
 
@@ -66,11 +63,10 @@ AppShell
 
 - `BuildPage`：构建配置、构建环境摘要、高级参数、构建产物与下一步操作。
 - `ArtifactPage`：产物列表、复制路径、打开目录、部署入口。
-- `DeploymentPage`：部署中心总览、服务映射、环境资源、部署执行、高级自动化。
+- `DeploymentPage`：部署中心总览、服务映射、环境资源、部署执行、部署记录。
 - `ServicePage`：模块、产物、服务、环境、部署配置链路视图。
 - `EnvironmentPage`：完整环境管理。
-- `HistoryPage`：构建、自动化、部署历史。
-- `SettingsPage`：模板管理和高级自动化配置。
+- `HistoryPage`：构建、部署历史。
 
 ## 布局状态管理
 
@@ -97,5 +93,5 @@ Inspector 自动交互：
 - 构建失败 Inspector 自动切换诊断。
 - 部署、产物、服务、环境、历史、设置均为独立页面。
 - 高级参数默认折叠。
-- 原有构建、部署、历史、模板、任务链能力仍可访问。
+- 原有构建、部署、历史、模板能力仍可访问。
 - `npm run build` 通过。

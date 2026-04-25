@@ -5,6 +5,7 @@ import {
     Checkbox,
     Empty,
     Input,
+    InputNumber,
     List,
     Modal,
     Popconfirm,
@@ -16,19 +17,20 @@ import {
     Typography,
 } from 'antd'
 import {
+    ArrowDownOutlined,
+    ArrowUpOutlined,
     CloudServerOutlined,
     DeleteOutlined,
     DeploymentUnitOutlined,
     HistoryOutlined,
     InboxOutlined,
-    MinusCircleOutlined,
     PlayCircleOutlined,
     PlusOutlined,
     SaveOutlined,
     StopOutlined,
 } from '@ant-design/icons'
 import {useEffect, useMemo, useState} from 'react'
-import {TaskPipelinePanel} from '../TaskPipeline/TaskPipelinePanel'
+import {DeploymentHistoryTable} from './DeploymentHistoryTable'
 import {findDeployableArtifacts, flattenModules, moduleLabel,} from '../../services/deploymentTopologyService'
 import {selectLocalFile} from '../../services/tauri-api'
 import {useAppStore} from '../../store/useAppStore'
@@ -36,9 +38,11 @@ import {useNavigationStore} from '../../store/navigationStore'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
 import type {
     BuildArtifact,
-    DeploymentCustomCommand,
+    DeployFailureStrategy,
     DeploymentProfile,
     DeploymentStage,
+    DeployStep,
+    DeployStepType,
     SaveServerProfilePayload,
     ServerProfile,
 } from '../../types/domain'
@@ -62,15 +66,164 @@ const createDeploymentDraft = (): DeploymentProfile => ({
   moduleId: '',
   localArtifactPattern: '*.jar',
   remoteDeployPath: '',
+  deploymentSteps: [],
   customCommands: [],
 })
+
+const stepTypeOptions: {label: string; value: DeployStepType}[] = [
+  {label: 'SSH 命令', value: 'ssh_command'},
+  {label: '等待', value: 'wait'},
+  {label: '端口检测', value: 'port_check'},
+  {label: 'HTTP 健康检查', value: 'http_check'},
+  {label: '日志关键字检测', value: 'log_check'},
+  {label: '文件上传', value: 'upload_file'},
+]
+
+const failureStrategyOptions: {label: string; value: DeployFailureStrategy}[] = [
+  {label: '失败即停止', value: 'stop'},
+  {label: '失败后继续', value: 'continue'},
+  {label: '失败后回滚', value: 'rollback'},
+]
+
+const stepTypeLabel = (type?: string) =>
+  stepTypeOptions.find((item) => item.value === type)?.label ?? type ?? '部署步骤'
+
+const createDefaultStepConfig = (type: DeployStepType): DeployStep['config'] => {
+  switch (type) {
+    case 'wait':
+      return {waitSeconds: 10}
+    case 'port_check':
+      return {host: '127.0.0.1', port: 8080, checkIntervalSeconds: 3}
+    case 'http_check':
+      return {
+        url: 'http://127.0.0.1:8080/actuator/health',
+        method: 'GET',
+        expectedStatusCodes: [200],
+        expectedBodyContains: 'UP',
+        checkIntervalSeconds: 5,
+      }
+    case 'log_check':
+      return {
+        logPath: '${remoteDeployPath}/${artifactName}.log',
+        successKeywords: ['Started'],
+        failureKeywords: ['Exception', 'ERROR', 'Address already in use'],
+        checkIntervalSeconds: 3,
+      }
+    case 'upload_file':
+      return {
+        localPath: '${artifactPath}',
+        remotePath: '${remoteDeployPath}/.${artifactName}.uploading',
+        overwrite: true,
+      }
+    case 'ssh_command':
+    default:
+      return {command: '', successExitCodes: [0]}
+  }
+}
+
+const createDeployStep = (type: DeployStepType, order: number, name?: string): DeployStep => ({
+  id: crypto.randomUUID(),
+  enabled: true,
+  name: name ?? stepTypeLabel(type),
+  type,
+  order,
+  timeoutSeconds: type === 'wait' ? undefined : type === 'http_check' || type === 'log_check' ? 90 : 60,
+  retryCount: type === 'http_check' || type === 'port_check' || type === 'log_check' ? 1 : 0,
+  retryIntervalSeconds: 3,
+  failureStrategy: 'stop',
+  config: createDefaultStepConfig(type),
+})
+
+const stepConfigRecord = (step: DeployStep) => step.config as Record<string, unknown>
+
+const toNumberList = (value: unknown, fallback: number[]) => {
+  if (Array.isArray(value)) {
+    const values = value.map((item) => Number(item)).filter((item) => Number.isFinite(item))
+    return values.length > 0 ? values : fallback
+  }
+  if (typeof value === 'string') {
+    const values = value.split(',').map((item) => Number(item.trim())).filter((item) => Number.isFinite(item))
+    return values.length > 0 ? values : fallback
+  }
+  return fallback
+}
+
+const toStringList = (value: unknown, fallback: string[] = []) => {
+  if (Array.isArray(value)) {
+    return value.map(String).map((item) => item.trim()).filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map((item) => item.trim()).filter(Boolean)
+  }
+  return fallback
+}
+
+const stepSummary = (step: DeployStep) => {
+  const config = stepConfigRecord(step)
+  switch (step.type) {
+    case 'ssh_command':
+      return String(config.command ?? '').slice(0, 90) || '未配置命令'
+    case 'wait':
+      return `等待 ${Number(config.waitSeconds ?? 0)} 秒`
+    case 'port_check':
+      return `${String(config.host ?? '')}:${Number(config.port ?? 0)}，间隔 ${Number(config.checkIntervalSeconds ?? 0)} 秒`
+    case 'http_check':
+      return `${String(config.method ?? 'GET')} ${String(config.url ?? '')}，期望 ${toNumberList(config.expectedStatusCodes, [200]).join(',')}`
+    case 'log_check':
+      return `${String(config.logPath ?? '')}，成功关键字 ${toStringList(config.successKeywords).join(', ') || '-'}`
+    case 'upload_file':
+      return `${String(config.localPath ?? '')} → ${String(config.remotePath ?? '')}`
+    default:
+      return ''
+  }
+}
+
+const createSpringBootJarSteps = (): DeployStep[] => {
+  const steps: DeployStep[] = [
+    createDeployStep('upload_file', 10, '上传 jar 包'),
+    createDeployStep('ssh_command', 20, '备份旧 jar'),
+    createDeployStep('ssh_command', 30, '停止旧服务'),
+    createDeployStep('wait', 40, '等待端口释放'),
+    createDeployStep('ssh_command', 50, '替换 jar 文件'),
+    createDeployStep('ssh_command', 60, '启动新服务'),
+    createDeployStep('wait', 70, '等待服务初始化'),
+    createDeployStep('port_check', 80, '检查服务端口'),
+    createDeployStep('http_check', 90, 'HTTP 健康检查'),
+    createDeployStep('log_check', 100, '检查启动日志'),
+  ]
+
+  steps[1].config = {command: 'if [ -f "${remoteDeployPath}/${artifactName}" ]; then cp -f "${remoteDeployPath}/${artifactName}" "${remoteDeployPath}/${artifactName}.bak"; fi', successExitCodes: [0]}
+  steps[2].config = {command: 'pkill -f "${artifactName}" || true', successExitCodes: [0]}
+  steps[3].config = {waitSeconds: 3}
+  steps[4].config = {command: 'mv -f "${remoteDeployPath}/.${artifactName}.uploading" "${remoteDeployPath}/${artifactName}"', successExitCodes: [0]}
+  steps[5].config = {command: 'nohup java -jar "${remoteDeployPath}/${artifactName}" > "${remoteDeployPath}/${artifactName}.log" 2>&1 &', successExitCodes: [0]}
+  steps[6].config = {waitSeconds: 10}
+  steps[7].config = {host: '127.0.0.1', port: 8080, checkIntervalSeconds: 3}
+  steps[8].config = {
+    url: 'http://127.0.0.1:8080/actuator/health',
+    method: 'GET',
+    expectedStatusCodes: [200],
+    expectedBodyContains: 'UP',
+    checkIntervalSeconds: 5,
+  }
+  steps[9].config = {
+    logPath: '${remoteDeployPath}/${artifactName}.log',
+    successKeywords: ['Started'],
+    failureKeywords: ['Exception', 'ERROR', 'Address already in use'],
+    checkIntervalSeconds: 3,
+  }
+  return steps
+}
 
 const deploymentStageStatus = (status: DeploymentStage['status']) => {
   switch (status) {
     case 'success': return 'finish'
     case 'failed': return 'error'
     case 'cancelled': return 'error'
+    case 'timeout': return 'error'
     case 'running': return 'process'
+    case 'checking': return 'process'
+    case 'waiting': return 'process'
     default: return 'wait'
   }
 }
@@ -97,15 +250,13 @@ const deploymentTaskColor = (status: string) => {
 }
 
 const defaultDeploymentStages: DeploymentStage[] = [
-  {key: 'upload', label: '上传产物', status: 'pending'},
-  {key: 'stop', label: '停止旧服务', status: 'pending'},
-  {key: 'replace', label: '替换文件', status: 'pending'},
-  {key: 'start', label: '启动服务', status: 'pending'},
-  {key: 'health', label: '健康检查', status: 'pending'},
+  {key: 'upload', label: '上传产物', type: 'upload_file', status: 'pending', logs: []},
+  {key: 'start', label: '启动服务', type: 'ssh_command', status: 'pending', logs: []},
+  {key: 'health', label: '健康检查', type: 'http_check', status: 'pending', logs: []},
 ]
 
 const deploymentProgressCurrent = (stages: DeploymentStage[]) => {
-  const activeIndex = stages.findIndex((stage) => stage.status === 'running')
+  const activeIndex = stages.findIndex((stage) => ['running', 'checking', 'waiting'].includes(stage.status))
   if (activeIndex >= 0) {
     return activeIndex
   }
@@ -114,6 +265,23 @@ const deploymentProgressCurrent = (stages: DeploymentStage[]) => {
     return pendingIndex
   }
   return Math.max(stages.length - 1, 0)
+}
+
+const formatDuration = (durationMs?: number) => {
+  if (!durationMs) {
+    return ''
+  }
+  return durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`
+}
+
+const deploymentStageDescription = (stage: DeploymentStage) => {
+  const parts = [
+    stepTypeLabel(stage.type),
+    stage.message,
+    stage.durationMs ? `耗时 ${formatDuration(stage.durationMs)}` : '',
+    stage.retryCount ? `重试 ${stage.currentRetry ?? 0}/${stage.retryCount}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
 }
 
 const collectArtifacts = (currentArtifacts: BuildArtifact[], historyArtifacts: BuildArtifact[]) => {
@@ -153,6 +321,8 @@ export function DeploymentCenterPanel() {
   const [selectedDeploymentProfileId, setSelectedDeploymentProfileId] = useState<string>()
   const [selectedServerId, setSelectedServerId] = useState<string>()
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string>()
+  const [pipelineEditorOpen, setPipelineEditorOpen] = useState(false)
+  const [selectedStepId, setSelectedStepId] = useState<string>()
   const deploymentPreselectProfileId = useNavigationStore((state) => state.deploymentPreselectProfileId)
   const clearDeploymentPreselect = useNavigationStore((state) => state.clearDeploymentPreselect)
 
@@ -218,6 +388,12 @@ export function DeploymentCenterPanel() {
   const deploymentSuccessCount = deploymentTasks.filter((task) => task.status === 'success').length
   const runningDeploymentCount = deploymentTasks.filter((task) => !deploymentTaskFinished(task.status)).length
   const topologyRows = deploymentProfiles.slice(0, 6)
+  const deploymentSteps = useMemo(
+    () => [...(deploymentDraft.deploymentSteps ?? [])].sort((left, right) => left.order - right.order),
+    [deploymentDraft.deploymentSteps],
+  )
+  const selectedPipelineStep = deploymentSteps.find((step) => step.id === selectedStepId) ?? deploymentSteps[0]
+  const enabledStepCount = (deploymentDraft.deploymentSteps ?? []).filter((step) => step.enabled).length
   const serverStatus = (serverId: string) => {
     const latestTask = deploymentTasks.find((task) => task.serverId === serverId)
     if (!latestTask) {
@@ -235,6 +411,61 @@ export function DeploymentCenterPanel() {
     return {label: '部署中', color: 'processing'}
   }
 
+  const updateDeploymentSteps = (steps: DeployStep[], nextSelectedStepId?: string) => {
+    const normalized = steps
+      .map((step, index) => ({...step, order: (index + 1) * 10}))
+    setDeploymentDraft((state) => ({...state, deploymentSteps: normalized}))
+    if (nextSelectedStepId !== undefined) {
+      setSelectedStepId(nextSelectedStepId)
+    } else if (selectedStepId && !normalized.some((step) => step.id === selectedStepId)) {
+      setSelectedStepId(normalized[0]?.id)
+    }
+  }
+
+  const addDeploymentStep = (type: DeployStepType = 'ssh_command') => {
+    const nextStep = createDeployStep(type, (deploymentSteps.length + 1) * 10)
+    updateDeploymentSteps([...deploymentSteps, nextStep], nextStep.id)
+  }
+
+  const patchDeploymentStep = (stepId: string, patch: Partial<DeployStep>) => {
+    updateDeploymentSteps(
+      deploymentSteps.map((step) => step.id === stepId ? {...step, ...patch} : step),
+      stepId,
+    )
+  }
+
+  const patchDeploymentStepConfig = (stepId: string, patch: Record<string, unknown>) => {
+    updateDeploymentSteps(
+      deploymentSteps.map((step) =>
+        step.id === stepId
+          ? {...step, config: {...stepConfigRecord(step), ...patch} as DeployStep['config']}
+          : step),
+      stepId,
+    )
+  }
+
+  const removeDeploymentStep = (stepId: string) => {
+    updateDeploymentSteps(deploymentSteps.filter((step) => step.id !== stepId))
+  }
+
+  const moveDeploymentStep = (stepId: string, direction: -1 | 1) => {
+    const index = deploymentSteps.findIndex((step) => step.id === stepId)
+    const targetIndex = index + direction
+    if (index < 0 || targetIndex < 0 || targetIndex >= deploymentSteps.length) {
+      return
+    }
+    const next = [...deploymentSteps]
+    const [removed] = next.splice(index, 1)
+    next.splice(targetIndex, 0, removed)
+    updateDeploymentSteps(next, stepId)
+  }
+
+  const applySpringBootTemplate = () => {
+    const steps = createSpringBootJarSteps()
+    updateDeploymentSteps(steps, steps[0]?.id)
+    setPipelineEditorOpen(true)
+  }
+
   const openServer = (profile: ServerProfile) => {
     setServerDraft({
       id: profile.id,
@@ -250,7 +481,12 @@ export function DeploymentCenterPanel() {
   }
 
   const openDeployment = (profile: DeploymentProfile) => {
-    setDeploymentDraft(profile)
+    setDeploymentDraft({
+      ...profile,
+      deploymentSteps: profile.deploymentSteps ?? [],
+      customCommands: profile.customCommands ?? [],
+    })
+    setSelectedStepId(profile.deploymentSteps?.[0]?.id)
   }
 
   const packageDeploymentArtifact = async () => {
@@ -259,6 +495,154 @@ export function DeploymentCenterPanel() {
     }
 
     await startPackageBuild(selectedProfile.moduleId ? [selectedProfile.moduleId] : [])
+  }
+
+  const renderStepConfigFields = (step: DeployStep) => {
+    const config = stepConfigRecord(step)
+    const updateConfig = (patch: Record<string, unknown>) => patchDeploymentStepConfig(step.id, patch)
+
+    switch (step.type) {
+      case 'ssh_command':
+        return (
+          <>
+            <div className="step-field step-field-full">
+              <Text type="secondary">命令内容</Text>
+              <Input.TextArea
+                className="command-textarea"
+                rows={4}
+                value={String(config.command ?? '')}
+                onChange={(event) => updateConfig({command: event.target.value})}
+              />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">成功退出码</Text>
+              <Input
+                value={toNumberList(config.successExitCodes, [0]).join(',')}
+                onChange={(event) => updateConfig({successExitCodes: toNumberList(event.target.value, [0])})}
+              />
+            </div>
+          </>
+        )
+      case 'wait':
+        return (
+          <div className="step-field">
+            <Text type="secondary">等待秒数</Text>
+            <InputNumber
+              min={1}
+              value={Number(config.waitSeconds ?? 10)}
+              onChange={(value) => updateConfig({waitSeconds: Number(value) || 1})}
+            />
+          </div>
+        )
+      case 'port_check':
+        return (
+          <>
+            <div className="step-field">
+              <Text type="secondary">主机</Text>
+              <Input value={String(config.host ?? '')} onChange={(event) => updateConfig({host: event.target.value})} />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">端口</Text>
+              <InputNumber min={1} max={65535} value={Number(config.port ?? 8080)} onChange={(value) => updateConfig({port: Number(value) || 8080})} />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">检测间隔（秒）</Text>
+              <InputNumber min={1} value={Number(config.checkIntervalSeconds ?? 3)} onChange={(value) => updateConfig({checkIntervalSeconds: Number(value) || 1})} />
+            </div>
+          </>
+        )
+      case 'http_check':
+        return (
+          <>
+            <div className="step-field step-field-full">
+              <Text type="secondary">请求地址</Text>
+              <Input value={String(config.url ?? '')} onChange={(event) => updateConfig({url: event.target.value})} />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">请求方法</Text>
+              <Select
+                value={String(config.method ?? 'GET')}
+                options={[{label: 'GET', value: 'GET'}, {label: 'POST', value: 'POST'}]}
+                onChange={(value) => updateConfig({method: value})}
+              />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">期望状态码</Text>
+              <Input
+                value={toNumberList(config.expectedStatusCodes, [200]).join(',')}
+                onChange={(event) => updateConfig({expectedStatusCodes: toNumberList(event.target.value, [200])})}
+              />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">响应包含</Text>
+              <Input value={String(config.expectedBodyContains ?? '')} onChange={(event) => updateConfig({expectedBodyContains: event.target.value})} />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">检测间隔（秒）</Text>
+              <InputNumber min={1} value={Number(config.checkIntervalSeconds ?? 5)} onChange={(value) => updateConfig({checkIntervalSeconds: Number(value) || 1})} />
+            </div>
+            <div className="step-field step-field-full">
+              <Text type="secondary">请求头（JSON）</Text>
+              <Input.TextArea
+                rows={2}
+                value={JSON.stringify(config.headers ?? {}, null, 2)}
+                onChange={(event) => {
+                  try {
+                    updateConfig({headers: JSON.parse(event.target.value || '{}')})
+                  } catch {
+                    updateConfig({headers: config.headers ?? {}})
+                  }
+                }}
+              />
+            </div>
+            <div className="step-field step-field-full">
+              <Text type="secondary">请求体</Text>
+              <Input.TextArea rows={2} value={String(config.body ?? '')} onChange={(event) => updateConfig({body: event.target.value})} />
+            </div>
+          </>
+        )
+      case 'log_check':
+        return (
+          <>
+            <div className="step-field step-field-full">
+              <Text type="secondary">日志路径</Text>
+              <Input value={String(config.logPath ?? '')} onChange={(event) => updateConfig({logPath: event.target.value})} />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">成功关键字</Text>
+              <Input value={toStringList(config.successKeywords).join(',')} onChange={(event) => updateConfig({successKeywords: toStringList(event.target.value)})} />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">失败关键字</Text>
+              <Input value={toStringList(config.failureKeywords).join(',')} onChange={(event) => updateConfig({failureKeywords: toStringList(event.target.value)})} />
+            </div>
+            <div className="step-field">
+              <Text type="secondary">检测间隔（秒）</Text>
+              <InputNumber min={1} value={Number(config.checkIntervalSeconds ?? 3)} onChange={(value) => updateConfig({checkIntervalSeconds: Number(value) || 1})} />
+            </div>
+          </>
+        )
+      case 'upload_file':
+        return (
+          <>
+            <div className="step-field step-field-full">
+              <Text type="secondary">本地文件路径</Text>
+              <Input value={String(config.localPath ?? '')} onChange={(event) => updateConfig({localPath: event.target.value})} />
+            </div>
+            <div className="step-field step-field-full">
+              <Text type="secondary">远程目标路径</Text>
+              <Input value={String(config.remotePath ?? '')} onChange={(event) => updateConfig({remotePath: event.target.value})} />
+            </div>
+            <div className="step-field step-field-full">
+              <Checkbox checked={Boolean(config.overwrite)} onChange={(event) => updateConfig({overwrite: event.target.checked})}>
+                允许覆盖远程文件
+              </Checkbox>
+            </div>
+          </>
+        )
+      default:
+        return null
+    }
   }
 
   return (
@@ -406,7 +790,7 @@ export function DeploymentCenterPanel() {
                                 <Text strong>{profile.name}</Text>
                               </Space>
                               <Text type="secondary" className="artifact-meta">
-                                {profile.localArtifactPattern} → {profile.name} → 环境服务器 → {profile.remoteDeployPath || '未配置远端目录'}
+                                {profile.localArtifactPattern} → {profile.name} → {profile.deploymentSteps?.length ?? 0} 个流程步骤 → {profile.remoteDeployPath || '未配置远端目录'}
                               </Text>
                             </Space>
                           </List.Item>
@@ -558,68 +942,45 @@ export function DeploymentCenterPanel() {
                     value={deploymentDraft.remoteDeployPath}
                     onChange={(event) => setDeploymentDraft((state) => ({...state, remoteDeployPath: event.target.value}))}
                   />
-                  <Card title="部署步骤命令" size="small" className="panel-card">
-                    <Space direction="vertical" size={12} style={{width: '100%'}}>
-                      {deploymentDraft.customCommands.map((cmd, index) => (
-                        <Space key={cmd.id} wrap style={{width: '100%'}} align="start">
-                          <Checkbox
-                            checked={cmd.enabled}
-                            onChange={(event) => {
-                              const next = [...deploymentDraft.customCommands]
-                              next[index] = {...cmd, enabled: event.target.checked}
-                              setDeploymentDraft((state) => ({...state, customCommands: next}))
-                            }}
-                          />
-                          <Input
-                            placeholder="命令名称"
-                            style={{width: 140}}
-                            value={cmd.name}
-                            onChange={(event) => {
-                              const next = [...deploymentDraft.customCommands]
-                              next[index] = {...cmd, name: event.target.value}
-                              setDeploymentDraft((state) => ({...state, customCommands: next}))
-                            }}
-                          />
-                          <Input
-                            placeholder="远端命令或 URL"
-                            style={{minWidth: 280, flex: 1}}
-                            value={cmd.command}
-                            onChange={(event) => {
-                              const next = [...deploymentDraft.customCommands]
-                              next[index] = {...cmd, command: event.target.value}
-                              setDeploymentDraft((state) => ({...state, customCommands: next}))
-                            }}
-                          />
-                          <Button
-                            type="text"
-                            danger
-                            icon={<MinusCircleOutlined />}
-                            onClick={() => {
-                              const next = deploymentDraft.customCommands.filter((_, i) => i !== index)
-                              setDeploymentDraft((state) => ({...state, customCommands: next}))
-                            }}
-                          />
-                        </Space>
-                      ))}
-                      <Button
-                        type="dashed"
-                        icon={<PlusOutlined />}
-                        onClick={() => {
-                          const next: DeploymentCustomCommand[] = [
-                            ...deploymentDraft.customCommands,
-                            {
-                              id: crypto.randomUUID(),
-                              name: '',
-                              command: '',
-                              enabled: true,
-                              stage: 'after_replace',
-                            },
-                          ]
-                          setDeploymentDraft((state) => ({...state, customCommands: next}))
-                        }}
-                      >
-                        添加命令
-                      </Button>
+                  <Card
+                    title="部署流程"
+                    size="small"
+                    className="panel-card"
+                    extra={(
+                      <Space wrap>
+                        <Button size="small" onClick={applySpringBootTemplate}>
+                          Spring Boot Jar 模板
+                        </Button>
+                        <Button size="small" type="primary" onClick={() => setPipelineEditorOpen(true)}>
+                          配置流程
+                        </Button>
+                      </Space>
+                    )}
+                  >
+                    <Space direction="vertical" size={8} style={{width: '100%'}}>
+                      <Text type="secondary">
+                        {enabledStepCount > 0
+                          ? `已配置 ${deploymentSteps.length} 个步骤，${enabledStepCount} 个启用。`
+                          : deploymentDraft.customCommands.length > 0
+                            ? `旧版命令 ${deploymentDraft.customCommands.filter((item) => item.enabled).length} 条启用，保存新流程后将升级为流水线。`
+                            : '尚未配置部署流程。'}
+                      </Text>
+                      {deploymentSteps.length > 0 ? (
+                        <List
+                          size="small"
+                          dataSource={deploymentSteps.slice(0, 5)}
+                          renderItem={(step, index) => (
+                            <List.Item>
+                              <Space size={8} wrap className="artifact-item">
+                                <Tag>{index + 1}</Tag>
+                                <Tag color={step.enabled ? 'blue' : 'default'}>{stepTypeLabel(step.type)}</Tag>
+                                <Text strong>{step.name}</Text>
+                                <Text type="secondary" ellipsis className="artifact-meta">{stepSummary(step)}</Text>
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      ) : null}
                     </Space>
                   </Card>
 
@@ -662,7 +1023,9 @@ export function DeploymentCenterPanel() {
                             <Text type="secondary">{profile.remoteDeployPath}</Text>
                             <Text type="secondary">匹配：{profile.localArtifactPattern}</Text>
                             <Text type="secondary">
-                              命令：{profile.customCommands.filter((c) => c.enabled).length} 条启用
+                              部署流程：{profile.deploymentSteps?.length
+                                ? `${profile.deploymentSteps.filter((step) => step.enabled).length}/${profile.deploymentSteps.length} 个步骤启用`
+                                : `${profile.customCommands.filter((c) => c.enabled).length} 条旧版命令启用`}
                             </Text>
                           </Space>
                         </List.Item>
@@ -784,7 +1147,7 @@ export function DeploymentCenterPanel() {
                       type={selectedProfileModuleMissing ? 'warning' : 'info'}
                       showIcon
                       message={`服务映射：${selectedProfile.name}`}
-                      description={`模块：${selectedProfileModule?.artifactId ?? (selectedProfile.moduleId ? '当前项目不存在该模块' : '未绑定')}；目标目录：${selectedProfile.remoteDeployPath}；匹配规则：${selectedProfile.localArtifactPattern}${selectedServer ? `；服务器：${selectedServer.name}` : ''}`}
+                      description={`模块：${selectedProfileModule?.artifactId ?? (selectedProfile.moduleId ? '当前项目不存在该模块' : '未绑定')}；目标目录：${selectedProfile.remoteDeployPath}；匹配规则：${selectedProfile.localArtifactPattern}；部署流程：${selectedProfile.deploymentSteps?.filter((step) => step.enabled).length ?? 0} 个启用步骤${selectedServer ? `；服务器：${selectedServer.name}` : ''}`}
                     />
                   ) : null}
                   {currentDeploymentTask ? (
@@ -804,7 +1167,7 @@ export function DeploymentCenterPanel() {
                         items={deploymentStages.map((stage) => ({
                           title: stage.label,
                           status: deploymentStageStatus(stage.status),
-                          description: stage.message,
+                          description: deploymentStageDescription(stage),
                         }))}
                       />
                     </div>
@@ -813,12 +1176,159 @@ export function DeploymentCenterPanel() {
               ),
             },
             {
-              key: 'automation',
-              label: '高级自动化',
-              children: <TaskPipelinePanel title="高级自动化模板" />,
+              key: 'history',
+              label: '部署记录',
+              children: (
+                <Space direction="vertical" size={12} style={{width: '100%'}}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="生产部署记录"
+                    description="这里聚合每次部署的流水线步骤、耗时、失败原因和日志，适合上线后复盘、失败排查和重跑。"
+                  />
+                  <DeploymentHistoryTable />
+                </Space>
+              ),
             },
           ]}
         />
+        <Modal
+          title="部署流程配置"
+          open={pipelineEditorOpen}
+          width={1040}
+          okText="完成"
+          cancelText="关闭"
+          onOk={() => setPipelineEditorOpen(false)}
+          onCancel={() => setPipelineEditorOpen(false)}
+        >
+          <div className="deployment-pipeline-editor">
+            <div className="deployment-step-list">
+              <Space wrap style={{marginBottom: 10}}>
+                <Button icon={<PlusOutlined />} onClick={() => addDeploymentStep('ssh_command')}>
+                  添加步骤
+                </Button>
+                <Select
+                  placeholder="按类型添加"
+                  style={{width: 180}}
+                  options={stepTypeOptions}
+                  onChange={(value) => addDeploymentStep(value)}
+                />
+                <Button onClick={applySpringBootTemplate}>生成 Spring Boot 模板</Button>
+              </Space>
+              {deploymentSteps.length === 0 ? (
+                <Empty description="暂无部署步骤" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              ) : (
+                <List
+                  size="small"
+                  dataSource={deploymentSteps}
+                  renderItem={(step, index) => (
+                    <List.Item
+                      className={step.id === selectedPipelineStep?.id ? 'deployment-step-item active' : 'deployment-step-item'}
+                      onClick={() => setSelectedStepId(step.id)}
+                      actions={[
+                        <Button key="up" size="small" type="text" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={(event) => { event.stopPropagation(); moveDeploymentStep(step.id, -1) }} />,
+                        <Button key="down" size="small" type="text" icon={<ArrowDownOutlined />} disabled={index === deploymentSteps.length - 1} onClick={(event) => { event.stopPropagation(); moveDeploymentStep(step.id, 1) }} />,
+                        <Popconfirm
+                          key="delete"
+                          title="删除该部署步骤？"
+                          okText="删除"
+                          cancelText="取消"
+                          onConfirm={(event) => {
+                            event?.stopPropagation()
+                            removeDeploymentStep(step.id)
+                          }}
+                        >
+                          <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} />
+                        </Popconfirm>,
+                      ]}
+                    >
+                      <Space direction="vertical" size={2} className="artifact-item">
+                        <Space size={8} wrap>
+                          <Tag>{index + 1}</Tag>
+                          <Tag color={step.enabled ? 'blue' : 'default'}>{stepTypeLabel(step.type)}</Tag>
+                          <Text strong ellipsis>{step.name}</Text>
+                        </Space>
+                        <Text type="secondary" className="artifact-meta" ellipsis title={stepSummary(step)}>
+                          {stepSummary(step)}
+                        </Text>
+                      </Space>
+                    </List.Item>
+                  )}
+                />
+              )}
+            </div>
+
+            <div className="deployment-step-detail">
+              {selectedPipelineStep ? (
+                <Space direction="vertical" size={14} style={{width: '100%'}}>
+                  <Space wrap>
+                    <Checkbox
+                      checked={selectedPipelineStep.enabled}
+                      onChange={(event) => patchDeploymentStep(selectedPipelineStep.id, {enabled: event.target.checked})}
+                    >
+                      启用
+                    </Checkbox>
+                    <Select
+                      style={{width: 180}}
+                      value={selectedPipelineStep.type}
+                      options={stepTypeOptions}
+                      onChange={(value: DeployStepType) =>
+                        patchDeploymentStep(selectedPipelineStep.id, {
+                          type: value,
+                          name: selectedPipelineStep.name || stepTypeLabel(value),
+                          config: createDefaultStepConfig(value),
+                        })}
+                    />
+                  </Space>
+                  <div className="step-card-body">
+                    <div className="step-field step-field-full">
+                      <Text type="secondary">步骤名称</Text>
+                      <Input
+                        value={selectedPipelineStep.name}
+                        onChange={(event) => patchDeploymentStep(selectedPipelineStep.id, {name: event.target.value})}
+                      />
+                    </div>
+                    <div className="step-field">
+                      <Text type="secondary">超时时间（秒）</Text>
+                      <InputNumber
+                        min={1}
+                        value={selectedPipelineStep.timeoutSeconds}
+                        onChange={(value) => patchDeploymentStep(selectedPipelineStep.id, {timeoutSeconds: Number(value) || undefined})}
+                      />
+                    </div>
+                    <div className="step-field">
+                      <Text type="secondary">重试次数</Text>
+                      <InputNumber
+                        min={0}
+                        value={selectedPipelineStep.retryCount ?? 0}
+                        onChange={(value) => patchDeploymentStep(selectedPipelineStep.id, {retryCount: Number(value) || 0})}
+                      />
+                    </div>
+                    <div className="step-field">
+                      <Text type="secondary">重试间隔（秒）</Text>
+                      <InputNumber
+                        min={1}
+                        value={selectedPipelineStep.retryIntervalSeconds ?? 3}
+                        onChange={(value) => patchDeploymentStep(selectedPipelineStep.id, {retryIntervalSeconds: Number(value) || 1})}
+                      />
+                    </div>
+                    <div className="step-field">
+                      <Text type="secondary">失败策略</Text>
+                      <Select
+                        value={selectedPipelineStep.failureStrategy ?? 'stop'}
+                        options={failureStrategyOptions}
+                        onChange={(value) => patchDeploymentStep(selectedPipelineStep.id, {failureStrategy: value})}
+                      />
+                    </div>
+                    {renderStepConfigFields(selectedPipelineStep)}
+                  </div>
+                </Space>
+              ) : (
+                <Empty description="选择左侧步骤进行配置" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              )}
+            </div>
+          </div>
+        </Modal>
       </Space>
     </Card>
   )

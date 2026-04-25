@@ -9,7 +9,7 @@ export function HistoryPage() {
       <div className="workspace-heading">
         <div>
           <Title level={3}>历史管理</Title>
-          <Text type="secondary">统一查看构建记录、自动化执行和部署记录。</Text>
+          <Text type="secondary">统一查看构建记录和部署记录。</Text>
         </div>
       </div>
       <WorkbenchHistoryPanel />

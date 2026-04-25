@@ -1,27 +1,30 @@
 use crate::error::{to_user_error, AppResult};
-use crate::models::deployment::{DeploymentCustomCommand, DeploymentStage, DeploymentTask, StartDeploymentPayload};
+use crate::models::deployment::{
+    DeployStep, DeploymentProfile, DeploymentStage, DeploymentTask, StartDeploymentPayload,
+};
 use crate::repositories::deployment_repo;
-use crate::services::{health_check_service, ssh_transport_service::SshConnection};
-use chrono::Utc;
-use std::collections::HashSet;
+use crate::services::ssh_transport_service::SshConnection;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-const STAGE_UPLOAD: &str = "upload";
-const STAGE_STOP: &str = "stop";
-const STAGE_REPLACE: &str = "replace";
-const STAGE_START: &str = "start";
-const STAGE_HEALTH: &str = "health";
+const TYPE_SSH_COMMAND: &str = "ssh_command";
+const TYPE_WAIT: &str = "wait";
+const TYPE_PORT_CHECK: &str = "port_check";
+const TYPE_HTTP_CHECK: &str = "http_check";
+const TYPE_LOG_CHECK: &str = "log_check";
+const TYPE_UPLOAD_FILE: &str = "upload_file";
 
-const PHASE_BEFORE_STOP: &str = "before_stop";
-const PHASE_AFTER_STOP: &str = "after_stop";
-const PHASE_AFTER_REPLACE: &str = "after_replace";
-const PHASE_AFTER_START: &str = "after_start";
-const PHASE_AFTER_HEALTH: &str = "after_health";
+const STRATEGY_STOP: &str = "stop";
+const STRATEGY_CONTINUE: &str = "continue";
+const STRATEGY_ROLLBACK: &str = "rollback";
 
 #[derive(Clone, Default)]
 pub struct DeploymentControlState {
@@ -49,6 +52,63 @@ impl DeploymentControlState {
             .map(|task_ids| task_ids.contains(task_id))
             .unwrap_or(false)
     }
+}
+
+#[derive(Debug, Clone)]
+struct DeploymentContext {
+    artifact_path: String,
+    artifact_name: String,
+    remote_deploy_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SshCommandConfig {
+    command: String,
+    success_exit_codes: Option<Vec<i32>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WaitConfig {
+    wait_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortCheckConfig {
+    host: String,
+    port: u16,
+    check_interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpCheckConfig {
+    url: String,
+    method: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+    expected_status_codes: Option<Vec<u16>>,
+    expected_body_contains: Option<String>,
+    check_interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LogCheckConfig {
+    log_path: String,
+    success_keywords: Vec<String>,
+    failure_keywords: Option<Vec<String>>,
+    check_interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadFileConfig {
+    local_path: String,
+    remote_path: String,
+    overwrite: bool,
 }
 
 pub fn start_deployment(app: AppHandle, payload: StartDeploymentPayload) -> AppResult<String> {
@@ -116,8 +176,12 @@ fn execute_deployment(
         .and_then(|value| value.to_str())
         .ok_or_else(|| to_user_error("无法识别产物文件名。"))?
         .to_string();
-
-    let started_at = Utc::now().to_rfc3339();
+    let context = DeploymentContext {
+        artifact_path: payload.local_artifact_path.clone(),
+        artifact_name: artifact_name.clone(),
+        remote_deploy_path: normalize_remote_dir(&profile.remote_deploy_path),
+    };
+    let steps = normalized_steps(&profile, &context);
     let started = Instant::now();
     let mut task = DeploymentTask {
         id: task_id.to_string(),
@@ -128,25 +192,16 @@ fn execute_deployment(
         server_name: Some(server.name.clone()),
         module_id: profile.module_id.clone(),
         artifact_path: payload.local_artifact_path.clone(),
-        artifact_name: artifact_name.clone(),
+        artifact_name,
         status: "pending".to_string(),
         log: Vec::new(),
-        stages: vec![
-            create_stage(STAGE_UPLOAD, "上传产物"),
-            create_stage(STAGE_STOP, "停止旧服务"),
-            create_stage(STAGE_REPLACE, "替换文件"),
-            create_stage(STAGE_START, "启动服务"),
-            create_stage(STAGE_HEALTH, "健康检查"),
-        ],
-        created_at: started_at,
+        stages: steps.iter().map(create_stage_from_step).collect(),
+        created_at: Utc::now().to_rfc3339(),
         finished_at: None,
     };
 
-    // Open SSH connection once, reuse for all operations
     append_log(app, &mut task, None, format!("连接到 {}:{}", server.host, server.port));
-    task.status = "uploading".to_string();
     emit_task_update(app, &task);
-
     let conn = match SshConnection::connect(&server) {
         Ok(conn) => {
             append_log(app, &mut task, None, "SSH 连接建立成功".to_string());
@@ -154,36 +209,399 @@ fn execute_deployment(
             conn
         }
         Err(error) => {
-            fail_stage(app, &mut task, STAGE_UPLOAD, error.clone());
+            fail_first_stage(app, &mut task, error);
             return Ok(task);
         }
     };
 
-    let remote_deploy_path = normalize_remote_dir(&profile.remote_deploy_path);
-    let remote_temp_path = format!("{}/.{}.uploading", remote_deploy_path, artifact_name);
-    let remote_target_path = format!("{}/{}", remote_deploy_path, artifact_name);
-
-    if finish_if_cancelled(app, &mut task, STAGE_UPLOAD) {
-        return Ok(task);
+    for step in steps.iter().filter(|step| step.enabled) {
+        if finish_if_cancelled(app, &mut task, &step.id) {
+            return Ok(task);
+        }
+        task.status = task_status_for_step(&step.step_type).to_string();
+        emit_task_update(app, &task);
+        match execute_step_with_retry(app, &conn, &mut task, step, &context, task_id) {
+            Ok(()) => {}
+            Err(error) => {
+                let strategy = step.failure_strategy.as_deref().unwrap_or(STRATEGY_STOP);
+                if strategy == STRATEGY_CONTINUE {
+                    append_log(
+                        app,
+                        &mut task,
+                        Some(step.id.clone()),
+                        format!("步骤失败但策略为继续：{}", error),
+                    );
+                    continue;
+                }
+                if strategy == STRATEGY_ROLLBACK {
+                    append_log(
+                        app,
+                        &mut task,
+                        Some(step.id.clone()),
+                        "步骤失败，回滚策略已触发；当前版本仅停止后续步骤，后续可接入回滚流水线。".to_string(),
+                    );
+                }
+                mark_pending_stages_skipped(&mut task, "前序步骤失败，跳过。");
+                task.status = "failed".to_string();
+                task.finished_at = Some(Utc::now().to_rfc3339());
+                emit_task_update(app, &task);
+                return Ok(task);
+            }
+        }
     }
 
-    update_stage(&mut task, STAGE_UPLOAD, "running", Some("上传进度 0%".to_string()));
+    task.status = "success".to_string();
+    task.finished_at = Some(Utc::now().to_rfc3339());
+    append_log(
+        app,
+        &mut task,
+        None,
+        format!("部署流水线完成，总耗时 {} ms", started.elapsed().as_millis()),
+    );
     emit_task_update(app, &task);
-    if let Err(error) = conn.execute_with_cancel(
-        &format!("mkdir -p {}", shell_quote(&remote_deploy_path)),
-        || is_cancel_requested(app, task_id),
-    ) {
-        fail_stage(app, &mut task, STAGE_UPLOAD, error);
-        return Ok(task);
+    Ok(task)
+}
+
+fn execute_step_with_retry(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    step: &DeployStep,
+    context: &DeploymentContext,
+    task_id: &str,
+) -> AppResult<()> {
+    let retry_count = step.retry_count.unwrap_or(0);
+    let retry_interval = step.retry_interval_seconds.unwrap_or(3);
+    let mut last_error = None;
+
+    for attempt in 0..=retry_count {
+        if attempt > 0 {
+            update_stage_retry(task, &step.id, attempt, retry_count);
+            append_log(
+                app,
+                task,
+                Some(step.id.clone()),
+                format!("开始第 {}/{} 次重试", attempt, retry_count),
+            );
+            emit_task_update(app, task);
+        }
+        let status = running_status_for_step(&step.step_type);
+        update_stage(task, &step.id, status, Some(stage_running_message(step)));
+        emit_task_update(app, task);
+        match execute_single_step(app, conn, task, step, context, task_id) {
+            Ok(message) => {
+                update_stage(task, &step.id, "success", Some(message.clone()));
+                append_log(app, task, Some(step.id.clone()), message);
+                emit_task_update(app, task);
+                return Ok(());
+            }
+            Err(error) => {
+                if is_cancel_requested(app, task_id) {
+                    mark_cancelled(app, task, &step.id, "部署已停止。");
+                    return Err(to_user_error("部署已停止。"));
+                }
+                last_error = Some(error.clone());
+                if attempt < retry_count {
+                    update_stage(
+                        task,
+                        &step.id,
+                        status,
+                        Some(format!("执行失败：{}，{} 秒后重试", error, retry_interval)),
+                    );
+                    append_log(app, task, Some(step.id.clone()), format!("步骤失败：{}", error));
+                    emit_task_update(app, task);
+                    if !sleep_with_cancel(app, task_id, retry_interval) {
+                        mark_cancelled(app, task, &step.id, "部署已停止。");
+                        return Err(to_user_error("部署已停止。"));
+                    }
+                }
+            }
+        }
     }
-    if finish_if_cancelled(app, &mut task, STAGE_UPLOAD) {
-        return Ok(task);
+
+    let error = last_error.unwrap_or_else(|| "步骤执行失败。".to_string());
+    let status = if error.contains("超时") { "timeout" } else { "failed" };
+    update_stage(task, &step.id, status, Some(error.clone()));
+    append_log(app, task, Some(step.id.clone()), format!("步骤失败：{}", error));
+    emit_task_update(app, task);
+    Err(to_user_error(error))
+}
+
+fn execute_single_step(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    step: &DeployStep,
+    context: &DeploymentContext,
+    task_id: &str,
+) -> AppResult<String> {
+    match step.step_type.as_str() {
+        TYPE_SSH_COMMAND => execute_ssh_step(app, conn, step, context, task_id),
+        TYPE_WAIT => execute_wait_step(app, task, step, task_id),
+        TYPE_PORT_CHECK => execute_port_check_step(app, conn, task, step, context, task_id),
+        TYPE_HTTP_CHECK => execute_http_check_step(app, conn, task, step, context, task_id),
+        TYPE_LOG_CHECK => execute_log_check_step(app, conn, task, step, context, task_id),
+        TYPE_UPLOAD_FILE => execute_upload_step(app, conn, task, step, context, task_id),
+        other => Err(to_user_error(format!("暂不支持的部署步骤类型：{}", other))),
+    }
+}
+
+fn execute_ssh_step(
+    app: &AppHandle,
+    conn: &SshConnection,
+    step: &DeployStep,
+    context: &DeploymentContext,
+    task_id: &str,
+) -> AppResult<String> {
+    let config: SshCommandConfig = parse_config(step)?;
+    let mut command = expand_tokens(&config.command, context);
+    if let Some(timeout) = step.timeout_seconds.filter(|value| *value > 0) {
+        command = format!("timeout {} sh -lc {}", timeout, shell_quote(&command));
+    }
+    let result = conn.execute_allowing_status(
+        &command,
+        config.success_exit_codes.as_deref().unwrap_or(&[0]),
+        || is_cancel_requested(app, task_id),
+    )?;
+    Ok(if result.output.is_empty() {
+        format!("{} 执行完成，退出码 {}", step.name, result.exit_status)
+    } else {
+        format!("{} 输出：{}", step.name, result.output)
+    })
+}
+
+fn execute_wait_step(
+    app: &AppHandle,
+    task: &mut DeploymentTask,
+    step: &DeployStep,
+    task_id: &str,
+) -> AppResult<String> {
+    let config: WaitConfig = parse_config(step)?;
+    let wait_seconds = step
+        .timeout_seconds
+        .filter(|value| *value > 0)
+        .map(|timeout| timeout.min(config.wait_seconds))
+        .unwrap_or(config.wait_seconds);
+    for elapsed in 0..wait_seconds {
+        if is_cancel_requested(app, task_id) {
+            return Err(to_user_error("部署已停止。"));
+        }
+        update_stage(
+            task,
+            &step.id,
+            "waiting",
+            Some(format!("已等待 {} / {} 秒", elapsed, wait_seconds)),
+        );
+        emit_task_update(app, task);
+        thread::sleep(Duration::from_secs(1));
+    }
+    Ok(format!("等待完成：{} 秒", wait_seconds))
+}
+
+fn execute_port_check_step(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    step: &DeployStep,
+    context: &DeploymentContext,
+    task_id: &str,
+) -> AppResult<String> {
+    let config: PortCheckConfig = parse_config(step)?;
+    let host = expand_tokens(&config.host, context);
+    let timeout = step.timeout_seconds.unwrap_or(60).max(1);
+    let interval = config.check_interval_seconds.unwrap_or(3).max(1);
+    let started = Instant::now();
+    let mut attempts = 0_u32;
+    while started.elapsed() < Duration::from_secs(timeout) {
+        if is_cancel_requested(app, task_id) {
+            return Err(to_user_error("部署已停止。"));
+        }
+        attempts += 1;
+        update_stage(
+            task,
+            &step.id,
+            "checking",
+            Some(format!(
+                "第 {} 次检测 {}:{}，已等待 {} 秒",
+                attempts,
+                host,
+                config.port,
+                started.elapsed().as_secs()
+            )),
+        );
+        emit_task_update(app, task);
+        let command = format!(
+            "if command -v nc >/dev/null 2>&1; then nc -z -w 3 {host} {port}; else timeout 3 bash -lc {target}; fi",
+            host = shell_quote(&host),
+            port = config.port,
+            target = shell_quote(&format!("cat < /dev/null > /dev/tcp/{}/{}", host, config.port)),
+        );
+        if conn
+            .execute_with_cancel(&command, || is_cancel_requested(app, task_id))
+            .is_ok()
+        {
+            return Ok(format!("端口检测通过：{}:{}", host, config.port));
+        }
+        if !sleep_with_cancel(app, task_id, interval) {
+            return Err(to_user_error("部署已停止。"));
+        }
+    }
+    Err(to_user_error(format!("端口检测超时：{}:{}", host, config.port)))
+}
+
+fn execute_http_check_step(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    step: &DeployStep,
+    context: &DeploymentContext,
+    task_id: &str,
+) -> AppResult<String> {
+    let config: HttpCheckConfig = parse_config(step)?;
+    let url = expand_tokens(&config.url, context);
+    let timeout = step.timeout_seconds.unwrap_or(90).max(1);
+    let interval = config.check_interval_seconds.unwrap_or(5).max(1);
+    let expected_codes = config
+        .expected_status_codes
+        .clone()
+        .unwrap_or_else(|| vec![200]);
+    let expected_body = config
+        .expected_body_contains
+        .as_deref()
+        .map(|value| expand_tokens(value, context))
+        .filter(|value| !value.trim().is_empty());
+    let started = Instant::now();
+    let mut attempts = 0_u32;
+    let mut last_error = "尚未收到健康响应".to_string();
+
+    while started.elapsed() < Duration::from_secs(timeout) {
+        if is_cancel_requested(app, task_id) {
+            return Err(to_user_error("部署已停止。"));
+        }
+        attempts += 1;
+        update_stage(
+            task,
+            &step.id,
+            "checking",
+            Some(format!("第 {} 次 HTTP 检查，已等待 {} 秒", attempts, started.elapsed().as_secs())),
+        );
+        emit_task_update(app, task);
+        match run_remote_http_check(app, conn, &config, &url, task_id) {
+            Ok((status, body)) => {
+                let status_matched = expected_codes.contains(&status);
+                let body_matched = expected_body
+                    .as_ref()
+                    .map(|keyword| body.contains(keyword))
+                    .unwrap_or(true);
+                if status_matched && body_matched {
+                    return Ok(format!("HTTP 健康检查通过：{} {}", status, url));
+                }
+                last_error = format!(
+                    "HTTP 响应未满足条件：状态码 {}，期望 {:?}{}",
+                    status,
+                    expected_codes,
+                    expected_body
+                        .as_ref()
+                        .map(|keyword| format!("，响应需包含 {}", keyword))
+                        .unwrap_or_default()
+                );
+            }
+            Err(error) => {
+                last_error = error;
+            }
+        }
+        if !sleep_with_cancel(app, task_id, interval) {
+            return Err(to_user_error("部署已停止。"));
+        }
+    }
+    Err(to_user_error(format!("HTTP 健康检查超时：{}；{}", url, last_error)))
+}
+
+fn execute_log_check_step(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    step: &DeployStep,
+    context: &DeploymentContext,
+    task_id: &str,
+) -> AppResult<String> {
+    let config: LogCheckConfig = parse_config(step)?;
+    let log_path = expand_tokens(&config.log_path, context);
+    let timeout = step.timeout_seconds.unwrap_or(90).max(1);
+    let interval = config.check_interval_seconds.unwrap_or(3).max(1);
+    let started = Instant::now();
+    let mut attempts = 0_u32;
+
+    while started.elapsed() < Duration::from_secs(timeout) {
+        if is_cancel_requested(app, task_id) {
+            return Err(to_user_error("部署已停止。"));
+        }
+        attempts += 1;
+        update_stage(
+            task,
+            &step.id,
+            "checking",
+            Some(format!("第 {} 次日志检测，已等待 {} 秒", attempts, started.elapsed().as_secs())),
+        );
+        emit_task_update(app, task);
+        let command = format!("tail -n 500 {} 2>/dev/null || true", shell_quote(&log_path));
+        let result = conn.execute_with_cancel(&command, || is_cancel_requested(app, task_id))?;
+        let content = result.output;
+        if let Some(keyword) = config
+            .failure_keywords
+            .as_ref()
+            .and_then(|items| items.iter().find(|keyword| content.contains(keyword.as_str())))
+        {
+            return Err(to_user_error(format!("日志中发现失败关键字：{}", keyword)));
+        }
+        if let Some(keyword) = config
+            .success_keywords
+            .iter()
+            .find(|keyword| content.contains(keyword.as_str()))
+        {
+            return Ok(format!("日志关键字检测通过：{}", keyword));
+        }
+        if !sleep_with_cancel(app, task_id, interval) {
+            return Err(to_user_error("部署已停止。"));
+        }
+    }
+    Err(to_user_error(format!("日志关键字检测超时：{}", log_path)))
+}
+
+fn execute_upload_step(
+    app: &AppHandle,
+    conn: &SshConnection,
+    task: &mut DeploymentTask,
+    step: &DeployStep,
+    context: &DeploymentContext,
+    task_id: &str,
+) -> AppResult<String> {
+    let config: UploadFileConfig = parse_config(step)?;
+    let local_path = expand_tokens(&config.local_path, context);
+    let remote_path = expand_tokens(&config.remote_path, context);
+    let local = Path::new(&local_path);
+    if !local.exists() {
+        return Err(to_user_error(format!("上传文件不存在：{}", local_path)));
+    }
+    let parent_dir = remote_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .filter(|dir| !dir.trim().is_empty())
+        .unwrap_or(".");
+    conn.execute_with_cancel(
+        &format!("mkdir -p {}", shell_quote(parent_dir)),
+        || is_cancel_requested(app, task_id),
+    )?;
+    if !config.overwrite {
+        let exists_command = format!("test ! -e {}", shell_quote(&remote_path));
+        conn.execute_with_cancel(&exists_command, || is_cancel_requested(app, task_id))
+            .map_err(|_| to_user_error(format!("远程文件已存在且未允许覆盖：{}", remote_path)))?;
     }
 
     let mut last_upload_percent = 0_u64;
-    let upload_result = conn.upload_file_with_progress(
-        artifact_path,
-        &remote_temp_path,
+    conn.upload_file_with_progress(
+        local,
+        &remote_path,
         || is_cancel_requested(app, task_id),
         |uploaded, total| {
             let percent = if total == 0 {
@@ -194,142 +612,183 @@ fn execute_deployment(
             if percent == 100 || percent >= last_upload_percent + 1 {
                 last_upload_percent = percent;
                 update_stage(
-                    &mut task,
-                    STAGE_UPLOAD,
+                    task,
+                    &step.id,
                     "running",
                     Some(format!("上传进度 {}% ({}/{})", percent, format_bytes(uploaded), format_bytes(total))),
                 );
-                emit_task_update(app, &task);
+                emit_task_update(app, task);
             }
         },
-    );
-    if let Err(error) = upload_result {
-        if is_cancel_requested(app, task_id) {
-            mark_cancelled(app, &mut task, STAGE_UPLOAD, "部署已停止。");
-        } else {
-            fail_stage(app, &mut task, STAGE_UPLOAD, error);
-        }
-        return Ok(task);
-    }
-    update_stage(
-        &mut task,
-        STAGE_UPLOAD,
-        "success",
-        Some(format!("产物已上传到 {}", remote_temp_path)),
-    );
-    append_log(app, &mut task, Some(STAGE_UPLOAD.to_string()), format!("产物已上传到 {}", remote_temp_path));
-    emit_task_update(app, &task);
-
-    // before_stop custom commands
-    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_BEFORE_STOP, task_id);
-    if task.status == "failed" || task.status == "cancelled" {
-        return Ok(task);
-    }
-
-    task.status = "stopping".to_string();
-    emit_task_update(app, &task);
-    let stop_commands = collect_stage_commands(&profile.custom_commands, STAGE_STOP);
-    if !stop_commands.is_empty() {
-        if run_custom_command_stage(app, &conn, &mut task, STAGE_STOP, &stop_commands, task_id)
-            .is_err()
-        {
-            return Ok(task);
-        }
-    } else {
-        skip_stage(app, &mut task, STAGE_STOP, "停止命令未配置，跳过。");
-    }
-
-    // after_stop custom commands
-    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_STOP, task_id);
-    if task.status == "failed" || task.status == "cancelled" {
-        return Ok(task);
-    }
-
-    if run_stage(app, &mut task, STAGE_REPLACE, || {
-        let command = format!(
-            "mkdir -p {dir} && mv -f {temp} {target}",
-            dir = shell_quote(&remote_deploy_path),
-            temp = shell_quote(&remote_temp_path),
-            target = shell_quote(&remote_target_path)
-        );
-        let result = conn.execute_with_cancel(&command, || {
-            is_cancel_requested(app, task_id)
-        })?;
-        Ok(if result.output.is_empty() {
-            format!("已替换远端文件 {}", remote_target_path)
-        } else {
-            result.output
-        })
-    })
-    .is_err()
-    {
-        return Ok(task);
-    }
-
-    // after_replace custom commands
-    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_REPLACE, task_id);
-    if task.status == "failed" || task.status == "cancelled" {
-        return Ok(task);
-    }
-
-    task.status = "starting".to_string();
-    emit_task_update(app, &task);
-    let start_commands = collect_stage_commands(&profile.custom_commands, STAGE_START);
-    if !start_commands.is_empty() {
-        if run_custom_command_stage(app, &conn, &mut task, STAGE_START, &start_commands, task_id)
-            .is_err()
-        {
-            return Ok(task);
-        }
-    } else {
-        skip_stage(app, &mut task, STAGE_START, "启动命令未配置，跳过。");
-    }
-
-    // after_start custom commands
-    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_START, task_id);
-    if task.status == "failed" || task.status == "cancelled" {
-        return Ok(task);
-    }
-
-    task.status = "checking".to_string();
-    emit_task_update(app, &task);
-    let health_commands = collect_stage_commands(&profile.custom_commands, STAGE_HEALTH);
-    if !health_commands.is_empty() {
-        if run_custom_command_stage(app, &conn, &mut task, STAGE_HEALTH, &health_commands, task_id)
-            .is_err()
-        {
-            return Ok(task);
-        }
-    } else {
-        skip_stage(app, &mut task, STAGE_HEALTH, "健康检查未配置，跳过。");
-    }
-
-    // after_health custom commands
-    run_custom_commands(app, &conn, &mut task, &profile.custom_commands, PHASE_AFTER_HEALTH, task_id);
-    if task.status == "failed" || task.status == "cancelled" {
-        return Ok(task);
-    }
-
-    task.status = "success".to_string();
-    task.finished_at = Some(Utc::now().to_rfc3339());
-    append_log(
-        app,
-        &mut task,
-        None,
-        format!("部署完成，总耗时 {} ms", started.elapsed().as_millis()),
-    );
-    emit_task_update(app, &task);
-    Ok(task)
+    )?;
+    Ok(format!("文件已上传到 {}", remote_path))
 }
 
-fn create_stage(key: &str, label: &str) -> DeploymentStage {
+fn run_remote_http_check(
+    app: &AppHandle,
+    conn: &SshConnection,
+    config: &HttpCheckConfig,
+    url: &str,
+    task_id: &str,
+) -> Result<(u16, String), String> {
+    let method = config.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
+    let mut command = format!(
+        "curl -sS -L -X {} -w '\\n__HTTP_STATUS__:%{{http_code}}' --max-time 15",
+        shell_quote(&method)
+    );
+    if let Some(headers) = &config.headers {
+        for (key, value) in headers {
+            command.push_str(" -H ");
+            command.push_str(&shell_quote(&format!("{}: {}", key, value)));
+        }
+    }
+    if let Some(body) = config.body.as_deref().filter(|value| !value.is_empty()) {
+        command.push_str(" --data ");
+        command.push_str(&shell_quote(body));
+    }
+    command.push(' ');
+    command.push_str(&shell_quote(url));
+    let result = conn
+        .execute_with_cancel(&command, || is_cancel_requested(app, task_id))
+        .map_err(|error| error.to_string())?;
+    let marker = "__HTTP_STATUS__:";
+    let marker_index = result
+        .output
+        .rfind(marker)
+        .ok_or_else(|| "HTTP 检查未返回状态码，请确认远端已安装 curl。".to_string())?;
+    let body = result.output[..marker_index].trim_end().to_string();
+    let status = result.output[marker_index + marker.len()..]
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| "HTTP 状态码解析失败。".to_string())?;
+    Ok((status, body))
+}
+
+fn normalized_steps(profile: &DeploymentProfile, context: &DeploymentContext) -> Vec<DeployStep> {
+    let mut steps = if profile.deployment_steps.is_empty() {
+        legacy_steps_from_custom_commands(profile, context)
+    } else {
+        profile.deployment_steps.clone()
+    };
+    steps.sort_by(|left, right| left.order.cmp(&right.order).then(left.name.cmp(&right.name)));
+    steps
+}
+
+fn legacy_steps_from_custom_commands(
+    profile: &DeploymentProfile,
+    context: &DeploymentContext,
+) -> Vec<DeployStep> {
+    let temp_path = format!(
+        "{}/.{}.uploading",
+        context.remote_deploy_path, context.artifact_name
+    );
+    let target_path = format!("{}/{}", context.remote_deploy_path, context.artifact_name);
+    let mut steps = vec![
+        create_upload_step("legacy-upload", "上传产物", 10, "${artifactPath}", &temp_path),
+        create_ssh_step(
+            "legacy-replace",
+            "替换文件",
+            40,
+            &format!(
+                "mkdir -p {dir} && mv -f {temp} {target}",
+                dir = shell_quote(&context.remote_deploy_path),
+                temp = shell_quote(&temp_path),
+                target = shell_quote(&target_path),
+            ),
+        ),
+    ];
+    let mut order = 20;
+    for command in &profile.custom_commands {
+        if !command.enabled || command.command.trim().is_empty() {
+            continue;
+        }
+        order += 10;
+        let is_health_url = is_http_url(&command.command);
+        steps.push(if is_health_url {
+            create_http_step(
+                &format!("legacy-{}", command.id),
+                &command.name,
+                order,
+                &command.command,
+            )
+        } else {
+            create_ssh_step(&format!("legacy-{}", command.id), &command.name, order, &command.command)
+        });
+    }
+    steps
+}
+
+fn create_upload_step(id: &str, name: &str, order: i32, local_path: &str, remote_path: &str) -> DeployStep {
+    DeployStep {
+        id: id.to_string(),
+        enabled: true,
+        name: name.to_string(),
+        step_type: TYPE_UPLOAD_FILE.to_string(),
+        order,
+        timeout_seconds: Some(120),
+        retry_count: Some(0),
+        retry_interval_seconds: Some(3),
+        failure_strategy: Some(STRATEGY_STOP.to_string()),
+        config: json!({
+            "localPath": local_path,
+            "remotePath": remote_path,
+            "overwrite": true,
+        }),
+    }
+}
+
+fn create_ssh_step(id: &str, name: &str, order: i32, command: &str) -> DeployStep {
+    DeployStep {
+        id: id.to_string(),
+        enabled: true,
+        name: if name.trim().is_empty() { "SSH 命令".to_string() } else { name.to_string() },
+        step_type: TYPE_SSH_COMMAND.to_string(),
+        order,
+        timeout_seconds: Some(60),
+        retry_count: Some(0),
+        retry_interval_seconds: Some(3),
+        failure_strategy: Some(STRATEGY_STOP.to_string()),
+        config: json!({
+            "command": command,
+            "successExitCodes": [0],
+        }),
+    }
+}
+
+fn create_http_step(id: &str, name: &str, order: i32, url: &str) -> DeployStep {
+    DeployStep {
+        id: id.to_string(),
+        enabled: true,
+        name: if name.trim().is_empty() { "HTTP 健康检查".to_string() } else { name.to_string() },
+        step_type: TYPE_HTTP_CHECK.to_string(),
+        order,
+        timeout_seconds: Some(90),
+        retry_count: Some(0),
+        retry_interval_seconds: Some(3),
+        failure_strategy: Some(STRATEGY_STOP.to_string()),
+        config: json!({
+            "url": url,
+            "method": "GET",
+            "expectedStatusCodes": [200],
+            "expectedBodyContains": "",
+            "checkIntervalSeconds": 5,
+        }),
+    }
+}
+
+fn create_stage_from_step(step: &DeployStep) -> DeploymentStage {
     DeploymentStage {
-        key: key.to_string(),
-        label: label.to_string(),
-        status: "pending".to_string(),
+        key: step.id.clone(),
+        label: step.name.clone(),
+        step_type: Some(step.step_type.clone()),
+        status: if step.enabled { "pending" } else { "skipped" }.to_string(),
         started_at: None,
         finished_at: None,
-        message: None,
+        message: if step.enabled { None } else { Some("步骤已禁用，跳过。".to_string()) },
+        retry_count: step.retry_count,
+        current_retry: Some(0),
+        duration_ms: None,
+        logs: Vec::new(),
     }
 }
 
@@ -344,20 +803,6 @@ fn create_failed_start_task(
         .unwrap_or(&payload.local_artifact_path)
         .to_string();
     let now = Utc::now().to_rfc3339();
-    let mut stages = vec![
-        create_stage(STAGE_UPLOAD, "上传产物"),
-        create_stage(STAGE_STOP, "停止旧服务"),
-        create_stage(STAGE_REPLACE, "替换文件"),
-        create_stage(STAGE_START, "启动服务"),
-        create_stage(STAGE_HEALTH, "健康检查"),
-    ];
-    if let Some(stage) = stages.first_mut() {
-        stage.status = "failed".to_string();
-        stage.message = Some(error.clone());
-        stage.started_at = Some(now.clone());
-        stage.finished_at = Some(now.clone());
-    }
-
     DeploymentTask {
         id: task_id.to_string(),
         build_task_id: payload.build_task_id.clone(),
@@ -369,57 +814,41 @@ fn create_failed_start_task(
         artifact_path: payload.local_artifact_path.clone(),
         artifact_name,
         status: "failed".to_string(),
-        log: vec![error],
-        stages,
+        log: vec![error.clone()],
+        stages: vec![DeploymentStage {
+            key: "startup".to_string(),
+            label: "启动部署".to_string(),
+            step_type: None,
+            status: "failed".to_string(),
+            started_at: Some(now.clone()),
+            finished_at: Some(now.clone()),
+            message: Some(error),
+            retry_count: Some(0),
+            current_retry: Some(0),
+            duration_ms: Some(0),
+            logs: Vec::new(),
+        }],
         created_at: now.clone(),
         finished_at: Some(now),
     }
 }
 
-fn run_stage<F>(
-    app: &AppHandle,
-    task: &mut DeploymentTask,
-    stage_key: &str,
-    action: F,
-) -> AppResult<()>
-where
-    F: FnOnce() -> AppResult<String>,
-{
-    if finish_if_cancelled(app, task, stage_key) {
-        return Err(to_user_error("部署已停止。"));
-    }
-
-    update_stage(task, stage_key, "running", None);
-    emit_task_update(app, task);
-    match action() {
-        Ok(message) => {
-            update_stage(task, stage_key, "success", Some(message.clone()));
-            append_log(app, task, Some(stage_key.to_string()), message);
-            emit_task_update(app, task);
-            Ok(())
-        }
-        Err(error) => {
-            if is_cancel_requested(app, &task.id) {
-                mark_cancelled(app, task, stage_key, "部署已停止。");
-            } else {
-                fail_stage(app, task, stage_key, error.clone());
-            }
-            Err(error)
-        }
-    }
-}
-
-fn fail_stage(app: &AppHandle, task: &mut DeploymentTask, stage_key: &str, error: String) {
-    update_stage(task, stage_key, "failed", Some(error.clone()));
+fn fail_first_stage(app: &AppHandle, task: &mut DeploymentTask, error: String) {
+    let stage_key = task
+        .stages
+        .first()
+        .map(|stage| stage.key.clone())
+        .unwrap_or_else(|| "startup".to_string());
+    update_stage(task, &stage_key, "failed", Some(error.clone()));
     task.status = "failed".to_string();
     task.finished_at = Some(Utc::now().to_rfc3339());
-    append_log(app, task, Some(stage_key.to_string()), error);
+    append_log(app, task, Some(stage_key), error);
     emit_task_update(app, task);
 }
 
 fn mark_cancelled(app: &AppHandle, task: &mut DeploymentTask, stage_key: &str, message: &str) {
     update_stage(task, stage_key, "cancelled", Some(message.to_string()));
-    mark_pending_stages_skipped(task);
+    mark_pending_stages_skipped(task, "部署已停止，跳过。");
     task.status = "cancelled".to_string();
     task.finished_at = Some(Utc::now().to_rfc3339());
     append_log(app, task, Some(stage_key.to_string()), message.to_string());
@@ -439,32 +868,44 @@ fn is_cancel_requested(app: &AppHandle, task_id: &str) -> bool {
     app.state::<DeploymentControlState>().is_cancelled(task_id)
 }
 
-fn mark_pending_stages_skipped(task: &mut DeploymentTask) {
+fn mark_pending_stages_skipped(task: &mut DeploymentTask, message: &str) {
     for stage in &mut task.stages {
         if stage.status == "pending" {
             stage.status = "skipped".to_string();
-            stage.message = Some("部署已停止，跳过。".to_string());
+            stage.message = Some(message.to_string());
             stage.finished_at = Some(Utc::now().to_rfc3339());
         }
     }
 }
 
-fn skip_stage(app: &AppHandle, task: &mut DeploymentTask, stage_key: &str, message: &str) {
-    update_stage(task, stage_key, "skipped", Some(message.to_string()));
-    append_log(app, task, Some(stage_key.to_string()), message.to_string());
-    emit_task_update(app, task);
-}
-
 fn update_stage(task: &mut DeploymentTask, stage_key: &str, status: &str, message: Option<String>) {
     if let Some(stage) = task.stages.iter_mut().find(|item| item.key == stage_key) {
-        if status == "running" {
-            stage.started_at = Some(Utc::now().to_rfc3339());
+        let now = Utc::now();
+        if matches!(status, "running" | "checking" | "waiting") && stage.started_at.is_none() {
+            stage.started_at = Some(now.to_rfc3339());
         }
-        if matches!(status, "success" | "failed" | "skipped" | "cancelled") {
-            stage.finished_at = Some(Utc::now().to_rfc3339());
+        if matches!(status, "success" | "failed" | "skipped" | "cancelled" | "timeout") {
+            stage.finished_at = Some(now.to_rfc3339());
+            stage.duration_ms = stage
+                .started_at
+                .as_deref()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .and_then(|started_at| {
+                    now.signed_duration_since(started_at.with_timezone(&Utc))
+                        .num_milliseconds()
+                        .try_into()
+                        .ok()
+                });
         }
         stage.status = status.to_string();
         stage.message = message;
+    }
+}
+
+fn update_stage_retry(task: &mut DeploymentTask, stage_key: &str, current_retry: u32, retry_count: u32) {
+    if let Some(stage) = task.stages.iter_mut().find(|item| item.key == stage_key) {
+        stage.current_retry = Some(current_retry);
+        stage.retry_count = Some(retry_count);
     }
 }
 
@@ -475,6 +916,11 @@ fn append_log(
     line: String,
 ) {
     task.log.push(line.clone());
+    if let Some(key) = stage_key.as_deref() {
+        if let Some(stage) = task.stages.iter_mut().find(|item| item.key == key) {
+            stage.logs.push(line.clone());
+        }
+    }
     let _ = app.emit(
         "deployment-log",
         crate::models::deployment::DeploymentLogEvent {
@@ -489,147 +935,62 @@ fn emit_task_update(app: &AppHandle, task: &DeploymentTask) {
     let _ = app.emit("deployment-updated", task.clone());
 }
 
+fn parse_config<T>(step: &DeployStep) -> AppResult<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_value::<T>(step.config.clone())
+        .map_err(|error| to_user_error(format!("步骤「{}」配置格式错误：{}", step.name, error)))
+}
+
+fn expand_tokens(value: &str, context: &DeploymentContext) -> String {
+    value
+        .replace("${artifactPath}", &context.artifact_path)
+        .replace("${artifactName}", &context.artifact_name)
+        .replace("${remoteDeployPath}", &context.remote_deploy_path)
+}
+
 fn normalize_remote_dir(value: &str) -> String {
     value.trim_end_matches('/').to_string()
 }
 
-fn collect_stage_commands<'a>(
-    commands: &'a [DeploymentCustomCommand],
-    stage: &str,
-) -> Vec<&'a DeploymentCustomCommand> {
-    commands
-        .iter()
-        .filter(|c| c.enabled && c.stage == stage && !c.command.trim().is_empty())
-        .collect()
+fn task_status_for_step(step_type: &str) -> &'static str {
+    match step_type {
+        TYPE_UPLOAD_FILE => "uploading",
+        TYPE_PORT_CHECK | TYPE_HTTP_CHECK | TYPE_LOG_CHECK => "checking",
+        TYPE_WAIT => "checking",
+        _ => "starting",
+    }
 }
 
-fn run_custom_command_stage(
-    app: &AppHandle,
-    conn: &SshConnection,
-    task: &mut DeploymentTask,
-    stage_key: &str,
-    commands: &[&DeploymentCustomCommand],
-    task_id: &str,
-) -> AppResult<()> {
-    if finish_if_cancelled(app, task, stage_key) {
-        return Err(to_user_error("部署已停止。"));
+fn running_status_for_step(step_type: &str) -> &'static str {
+    match step_type {
+        TYPE_WAIT => "waiting",
+        TYPE_PORT_CHECK | TYPE_HTTP_CHECK | TYPE_LOG_CHECK => "checking",
+        _ => "running",
     }
-    update_stage(task, stage_key, "running", None);
-    emit_task_update(app, task);
-
-    for cmd in commands {
-        if is_cancel_requested(app, task_id) {
-            mark_cancelled(app, task, stage_key, "部署已停止。");
-            return Err(to_user_error("部署已停止。"));
-        }
-        append_log(
-            app,
-            task,
-            Some(stage_key.to_string()),
-            format!("[{}] 执行: {}", cmd.name, cmd.command),
-        );
-        let result = if is_http_url(&cmd.command) {
-            health_check_service::check_health(&cmd.command)
-        } else {
-            conn.execute_with_cancel(&cmd.command, || is_cancel_requested(app, task_id))
-                .map(|r| {
-                    if r.output.is_empty() {
-                        format!("[{}] 执行完成", cmd.name)
-                    } else {
-                        format!("[{}] 输出: {}", cmd.name, r.output)
-                    }
-                })
-        };
-        match result {
-            Ok(msg) => {
-                append_log(app, task, Some(stage_key.to_string()), msg);
-            }
-            Err(error) => {
-                if is_cancel_requested(app, task_id) {
-                    mark_cancelled(app, task, stage_key, "部署已停止。");
-                } else {
-                    update_stage(task, stage_key, "failed", Some(error.clone()));
-                    task.status = "failed".to_string();
-                    task.finished_at = Some(Utc::now().to_rfc3339());
-                    append_log(
-                        app,
-                        task,
-                        Some(stage_key.to_string()),
-                        format!("[{}] 执行失败: {}", cmd.name, error),
-                    );
-                    emit_task_update(app, task);
-                }
-                return Err(to_user_error(error));
-            }
-        }
-    }
-
-    update_stage(
-        task,
-        stage_key,
-        "success",
-        Some(format!("{} 条命令执行完成", commands.len())),
-    );
-    emit_task_update(app, task);
-    Ok(())
 }
 
-fn run_custom_commands(
-    app: &AppHandle,
-    conn: &SshConnection,
-    task: &mut DeploymentTask,
-    commands: &[DeploymentCustomCommand],
-    stage: &str,
-    task_id: &str,
-) {
-    let to_run = collect_stage_commands(commands, stage);
-    if to_run.is_empty() {
-        return;
+fn stage_running_message(step: &DeployStep) -> String {
+    match step.step_type.as_str() {
+        TYPE_WAIT => "等待中".to_string(),
+        TYPE_PORT_CHECK => "端口检测中".to_string(),
+        TYPE_HTTP_CHECK => "HTTP 健康检查中".to_string(),
+        TYPE_LOG_CHECK => "日志关键字检测中".to_string(),
+        TYPE_UPLOAD_FILE => "文件上传中".to_string(),
+        _ => "执行中".to_string(),
     }
-    for cmd in to_run {
+}
+
+fn sleep_with_cancel(app: &AppHandle, task_id: &str, seconds: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    while Instant::now() < deadline {
         if is_cancel_requested(app, task_id) {
-            mark_cancelled(app, task, STAGE_REPLACE, "部署已停止。");
-            return;
+            return false;
         }
-        append_log(
-            app,
-            task,
-            None,
-            format!("[{}] 执行自定义命令: {}", cmd.name, cmd.command),
-        );
-        let result = if is_http_url(&cmd.command) {
-            health_check_service::check_health(&cmd.command).map_err(|e| e.to_string())
-        } else {
-            conn.execute_with_cancel(&cmd.command, || is_cancel_requested(app, task_id))
-                .map(|r| {
-                    if r.output.is_empty() {
-                        format!("[{}] 执行完成", cmd.name)
-                    } else {
-                        format!("[{}] 输出: {}", cmd.name, r.output)
-                    }
-                })
-        };
-        match result {
-            Ok(msg) => {
-                append_log(app, task, None, msg);
-            }
-            Err(error) => {
-                if is_cancel_requested(app, task_id) {
-                    mark_cancelled(app, task, STAGE_REPLACE, "部署已停止。");
-                } else {
-                    task.status = "failed".to_string();
-                    task.finished_at = Some(Utc::now().to_rfc3339());
-                    append_log(
-                        app,
-                        task,
-                        None,
-                        format!("[{}] 自定义命令执行失败: {}", cmd.name, error),
-                    );
-                }
-                return;
-            }
-        }
+        thread::sleep(Duration::from_millis(250));
     }
+    true
 }
 
 fn is_http_url(value: &str) -> bool {

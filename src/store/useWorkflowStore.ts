@@ -5,23 +5,15 @@ import type {
     DeploymentProfile,
     DeploymentStage,
     DeploymentTask,
+    DeployStepType,
     ModuleDependencyGraph,
     SaveServerProfilePayload,
     ServerProfile,
-    TaskPipeline,
-    TaskPipelineLogEvent,
-    TaskPipelineRun,
-    TaskPipelineStepEvent,
 } from '../types/domain'
-import {useAppStore} from './useAppStore'
 
 interface WorkflowState {
   dependencyGraph?: ModuleDependencyGraph
   dependencyLoading: boolean
-  taskPipelines: TaskPipeline[]
-  taskPipelineRuns: TaskPipelineRun[]
-  taskPipelineLogsByRunId: Record<string, string[]>
-  currentTaskPipelineRun?: TaskPipelineRun
   serverProfiles: ServerProfile[]
   deploymentProfiles: DeploymentProfile[]
   deploymentTasks: DeploymentTask[]
@@ -32,13 +24,6 @@ interface WorkflowState {
   initialize: () => Promise<void>
   loadDependencyGraph: (rootPath: string) => Promise<void>
   clearDependencyGraph: () => void
-  saveTaskPipeline: (pipeline: TaskPipeline) => Promise<void>
-  deleteTaskPipeline: (pipelineId: string) => Promise<void>
-  refreshTaskPipelines: () => Promise<void>
-  startTaskPipeline: (pipeline: TaskPipeline) => Promise<void>
-  appendTaskPipelineLog: (event: TaskPipelineLogEvent) => void
-  updateTaskPipelineStep: (event: TaskPipelineStepEvent) => void
-  finishTaskPipeline: (run: TaskPipelineRun) => void
   saveServerProfile: (payload: SaveServerProfilePayload) => Promise<void>
   deleteServerProfile: (serverId: string) => Promise<void>
   saveDeploymentProfile: (profile: DeploymentProfile) => Promise<void>
@@ -51,20 +36,10 @@ interface WorkflowState {
   finishDeploymentTask: (task: DeploymentTask) => void
   deleteDeploymentTask: (taskId: string) => Promise<void>
   rerunDeployment: (task: DeploymentTask) => Promise<void>
-  deleteTaskPipelineRun: (runId: string) => Promise<void>
-  rerunTaskPipeline: (run: TaskPipelineRun) => Promise<void>
 }
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
-
-const sortPipelines = (pipelines: TaskPipeline[]) =>
-  [...pipelines].sort((left, right) =>
-    (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')
-      || left.name.localeCompare(right.name, 'zh-CN'))
-
-const sortRuns = (runs: TaskPipelineRun[]) =>
-  [...runs].sort((left, right) => right.startedAt.localeCompare(left.startedAt))
 
 const sortProfiles = <T extends {updatedAt?: string; name?: string}>(items: T[]) =>
   [...items].sort((left, right) =>
@@ -74,22 +49,37 @@ const sortProfiles = <T extends {updatedAt?: string; name?: string}>(items: T[])
 const sortDeploymentTasks = (tasks: DeploymentTask[]) =>
   [...tasks].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 
-const createPendingDeploymentStages = (): DeploymentStage[] => [
-  {key: 'upload', label: '上传产物', status: 'pending'},
-  {key: 'stop', label: '停止旧服务', status: 'pending'},
-  {key: 'replace', label: '替换文件', status: 'pending'},
-  {key: 'start', label: '启动服务', status: 'pending'},
-  {key: 'health', label: '健康检查', status: 'pending'},
-]
+const createPendingDeploymentStages = (profile?: DeploymentProfile): DeploymentStage[] => {
+  const steps = profile?.deploymentSteps?.length
+    ? [...profile.deploymentSteps].sort((left, right) => left.order - right.order)
+    : []
+
+  if (steps.length > 0) {
+    return steps.map((step) => ({
+      key: step.id,
+      label: step.name,
+      type: step.type as DeployStepType,
+      status: step.enabled ? 'pending' : 'skipped',
+      message: step.enabled ? undefined : '步骤已禁用，跳过。',
+      retryCount: step.retryCount ?? 0,
+      currentRetry: 0,
+      logs: [],
+    }))
+  }
+
+  return [
+    {key: 'upload', label: '上传产物', type: 'upload_file', status: 'pending', logs: []},
+    {key: 'replace', label: '替换文件', type: 'ssh_command', status: 'pending', logs: []},
+    {key: 'start', label: '启动服务', type: 'ssh_command', status: 'pending', logs: []},
+    {key: 'health', label: '健康检查', type: 'http_check', status: 'pending', logs: []},
+  ]
+}
 
 const isDeploymentTaskRunning = (task?: DeploymentTask) =>
   Boolean(task && !['success', 'failed', 'cancelled'].includes(task.status))
 
 export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   dependencyLoading: false,
-  taskPipelines: [],
-  taskPipelineRuns: [],
-  taskPipelineLogsByRunId: {},
   serverProfiles: [],
   deploymentProfiles: [],
   deploymentTasks: [],
@@ -99,16 +89,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   initialize: async () => {
     set({loading: true, error: undefined})
     try {
-      const [taskPipelines, taskPipelineRuns, serverProfiles, deploymentProfiles, deploymentTasks] = await Promise.all([
-        api.listTaskPipelines(),
-        api.listTaskPipelineRuns(),
+      const [serverProfiles, deploymentProfiles, deploymentTasks] = await Promise.all([
         api.listServerProfiles(),
         api.listDeploymentProfiles(),
         api.listDeploymentTasks(),
       ])
       set({
-        taskPipelines: sortPipelines(taskPipelines),
-        taskPipelineRuns: sortRuns(taskPipelineRuns),
         serverProfiles: sortProfiles(serverProfiles),
         deploymentProfiles: sortProfiles(deploymentProfiles),
         deploymentTasks: sortDeploymentTasks(deploymentTasks),
@@ -138,122 +124,6 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   clearDependencyGraph: () => {
     set({dependencyGraph: undefined, dependencyLoading: false})
-  },
-
-  saveTaskPipeline: async (pipeline) => {
-    try {
-      await api.saveTaskPipeline(pipeline)
-      await get().refreshTaskPipelines()
-    } catch (error) {
-      set({error: getErrorMessage(error)})
-    }
-  },
-
-  deleteTaskPipeline: async (pipelineId) => {
-    try {
-      await api.deleteTaskPipeline(pipelineId)
-      await get().refreshTaskPipelines()
-    } catch (error) {
-      set({error: getErrorMessage(error)})
-    }
-  },
-
-  refreshTaskPipelines: async () => {
-    try {
-      const [taskPipelines, taskPipelineRuns] = await Promise.all([
-        api.listTaskPipelines(),
-        api.listTaskPipelineRuns(),
-      ])
-      set({
-        taskPipelines: sortPipelines(taskPipelines),
-        taskPipelineRuns: sortRuns(taskPipelineRuns),
-      })
-    } catch (error) {
-      set({error: getErrorMessage(error)})
-    }
-  },
-
-  startTaskPipeline: async (pipeline) => {
-    const appState = useAppStore.getState()
-    if (!appState.project || !appState.environment) {
-      set({error: '请先选择项目并完成环境识别。'})
-      return
-    }
-    try {
-      const runId = await api.startTaskPipeline({
-        pipeline,
-        projectRoot: appState.project.rootPath,
-        environment: appState.environment,
-      })
-      const pendingRun: TaskPipelineRun = {
-        id: runId,
-        pipelineId: pipeline.id,
-        pipelineName: pipeline.name,
-        projectRoot: appState.project.rootPath,
-        moduleIds: pipeline.moduleIds,
-        status: 'running',
-        totalDurationMs: 0,
-        startedAt: new Date().toISOString(),
-        steps: pipeline.steps.map((step) => ({
-          stepId: step.id,
-          label: step.label,
-          type: step.type,
-          status: step.enabled ? 'pending' : 'skipped',
-          output: [],
-        })),
-      }
-      set((state) => ({
-        currentTaskPipelineRun: pendingRun,
-        taskPipelineRuns: sortRuns([pendingRun, ...state.taskPipelineRuns.filter((item) => item.id !== runId)]),
-        taskPipelineLogsByRunId: {
-          ...state.taskPipelineLogsByRunId,
-          [runId]: [`${new Date().toLocaleTimeString()} 任务链已提交执行`],
-        },
-      }))
-    } catch (error) {
-      set({error: getErrorMessage(error)})
-    }
-  },
-
-  appendTaskPipelineLog: (event) => {
-    set((state) => ({
-      taskPipelineLogsByRunId: {
-        ...state.taskPipelineLogsByRunId,
-        [event.runId]: [...(state.taskPipelineLogsByRunId[event.runId] ?? []), event.line].slice(-400),
-      },
-    }))
-  },
-
-  updateTaskPipelineStep: (event) => {
-    set((state) => {
-      const updateRun = (run?: TaskPipelineRun) =>
-        run && run.id === event.runId
-          ? {
-              ...run,
-              steps: run.steps.map((step) =>
-                step.stepId === event.step.stepId ? event.step : step),
-            }
-          : run
-
-      return {
-        currentTaskPipelineRun: updateRun(state.currentTaskPipelineRun),
-        taskPipelineRuns: state.taskPipelineRuns.map((run) =>
-          run.id === event.runId
-            ? {
-                ...run,
-                steps: run.steps.map((step) =>
-                  step.stepId === event.step.stepId ? event.step : step),
-              }
-            : run),
-      }
-    })
-  },
-
-  finishTaskPipeline: (run) => {
-    set((state) => ({
-      currentTaskPipelineRun: run,
-      taskPipelineRuns: sortRuns([run, ...state.taskPipelineRuns.filter((item) => item.id !== run.id)]),
-    }))
   },
 
   saveServerProfile: async (payload) => {
@@ -316,6 +186,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
 
     try {
+      const profile = get().deploymentProfiles.find((item) => item.id === profileId)
       const taskId = await api.startDeployment({
         deploymentProfileId: profileId,
         serverId,
@@ -332,7 +203,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           artifactName: artifactPath.split(/[\\/]/).at(-1) ?? artifactPath,
           status: 'pending',
           log: [],
-          stages: createPendingDeploymentStages(),
+          stages: createPendingDeploymentStages(profile),
           createdAt: new Date().toISOString(),
         },
         deploymentLogsByTaskId: {
@@ -403,25 +274,5 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       task.artifactPath,
       task.buildTaskId,
     )
-  },
-
-  deleteTaskPipelineRun: async (runId) => {
-    try {
-      await api.deleteTaskPipelineRun(runId)
-      set((state) => ({
-        taskPipelineRuns: state.taskPipelineRuns.filter((item) => item.id !== runId),
-      }))
-    } catch (error) {
-      set({error: getErrorMessage(error)})
-    }
-  },
-
-  rerunTaskPipeline: async (run) => {
-    const pipeline = get().taskPipelines.find((p) => p.id === run.pipelineId)
-    if (!pipeline) {
-      set({error: '任务链模板已不存在，无法重跑。'})
-      return
-    }
-    await get().startTaskPipeline(pipeline)
   },
 }))

@@ -19,12 +19,8 @@ export function SidebarPanel({activePage}: SidebarPanelProps) {
   const artifacts = useAppStore((state) => state.artifacts)
   const history = useAppStore((state) => state.history)
   const environment = useAppStore((state) => state.environment)
-  const selectedModuleIds = useAppStore((state) => state.selectedModuleIds)
-  const templates = useAppStore((state) => state.templates)
-  const savedProjectPaths = useAppStore((state) => state.savedProjectPaths)
   const serverProfiles = useWorkflowStore((state) => state.serverProfiles)
   const deploymentProfiles = useWorkflowStore((state) => state.deploymentProfiles)
-  const taskPipelineRuns = useWorkflowStore((state) => state.taskPipelineRuns)
   const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
 
   if (activePage === 'build') {
@@ -148,7 +144,6 @@ export function SidebarPanel({activePage}: SidebarPanelProps) {
     const buildSuccess = history.filter((h) => h.status === 'SUCCESS').length
     const buildFailed = history.filter((h) => h.status === 'FAILED').length
     const lastBuild = history[0]
-    const lastPipeline = taskPipelineRuns[0]
     const lastDeployment = deploymentTasks[0]
 
     return (
@@ -165,17 +160,6 @@ export function SidebarPanel({activePage}: SidebarPanelProps) {
               {lastBuild ? (
                 <Text type="secondary" style={{fontSize: 12, marginTop: 4, display: 'block'}}>
                   最近：{new Date(lastBuild.createdAt).toLocaleString()} · {lastBuild.status === 'SUCCESS' ? '成功' : lastBuild.status === 'FAILED' ? '失败' : '已取消'}
-                </Text>
-              ) : null}
-            </div>
-            <div>
-              <Text type="secondary">自动化执行</Text>
-              <div style={{marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap'}}>
-                <Tag color="blue">总计 {taskPipelineRuns.length}</Tag>
-              </div>
-              {lastPipeline ? (
-                <Text type="secondary" style={{fontSize: 12, marginTop: 4, display: 'block'}}>
-                  最近：{lastPipeline.pipelineName} · {lastPipeline.status === 'success' ? '成功' : lastPipeline.status === 'failed' ? '失败' : '执行中'}
                 </Text>
               ) : null}
             </div>

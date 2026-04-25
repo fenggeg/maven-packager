@@ -6,7 +6,6 @@ import {DeploymentPage} from '../pages/DeploymentPage'
 import {EnvironmentPage} from '../pages/EnvironmentPage'
 import {HistoryPage} from '../pages/HistoryPage'
 import {ServicePage} from '../pages/ServicePage'
-import {SettingsPage} from '../pages/SettingsPage'
 
 interface MainWorkspaceProps {
   activePage: AppPage
@@ -20,7 +19,6 @@ export function MainWorkspace({activePage}: MainWorkspaceProps) {
     services: <ServicePage />,
     environment: <EnvironmentPage />,
     history: <HistoryPage />,
-    settings: <SettingsPage />,
   }
 
   return <section className="main-workspace">{pages[activePage]}</section>

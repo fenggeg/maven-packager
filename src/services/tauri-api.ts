@@ -27,11 +27,6 @@ import type {
     ServerProfile,
     StartBuildPayload,
     StartDeploymentPayload,
-    StartTaskPipelinePayload,
-    TaskPipeline,
-    TaskPipelineLogEvent,
-    TaskPipelineRun,
-    TaskPipelineStepEvent,
 } from '../types/domain'
 
 type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown }
@@ -169,20 +164,6 @@ export const api = {
   deleteTemplate: (templateId: string) =>
     invoke<void>('delete_template', { templateId }),
 
-  listTaskPipelines: () => invoke<TaskPipeline[]>('list_task_pipelines'),
-
-  saveTaskPipeline: (pipeline: TaskPipeline) =>
-    invoke<void>('save_task_pipeline', { pipeline }),
-
-  deleteTaskPipeline: (pipelineId: string) =>
-    invoke<void>('delete_task_pipeline', { pipelineId }),
-
-  listTaskPipelineRuns: () =>
-    invoke<TaskPipelineRun[]>('list_task_pipeline_runs'),
-
-  startTaskPipeline: (payload: StartTaskPipelinePayload) =>
-    invoke<string>('start_task_pipeline', { payload }),
-
   listServerProfiles: () => invoke<ServerProfile[]>('list_server_profiles'),
 
   saveServerProfile: (payload: SaveServerProfilePayload) =>
@@ -211,9 +192,6 @@ export const api = {
 
   deleteDeploymentTask: (taskId: string) =>
     invoke<void>('delete_deployment_task', { taskId }),
-
-  deleteTaskPipelineRun: (runId: string) =>
-    invoke<void>('delete_task_pipeline_run', { runId }),
 
   openPathInExplorer: (path: string) =>
     invoke<void>('open_path_in_explorer', { path }),
@@ -260,32 +238,6 @@ export async function registerBuildEvents(
 
   return () => {
     unlistenLog()
-    unlistenFinished()
-  }
-}
-
-export async function registerTaskPipelineEvents(
-  onLog: (event: TaskPipelineLogEvent) => void,
-  onStep: (event: TaskPipelineStepEvent) => void,
-  onFinished: (event: TaskPipelineRun) => void,
-) {
-  if (!isTauriRuntime()) {
-    return () => undefined
-  }
-
-  const unlistenLog = await listen<TaskPipelineLogEvent>('task-pipeline-log', (event) => {
-    onLog(event.payload)
-  })
-  const unlistenStep = await listen<TaskPipelineStepEvent>('task-pipeline-step', (event) => {
-    onStep(event.payload)
-  })
-  const unlistenFinished = await listen<TaskPipelineRun>('task-pipeline-finished', (event) => {
-    onFinished(event.payload)
-  })
-
-  return () => {
-    unlistenLog()
-    unlistenStep()
     unlistenFinished()
   }
 }

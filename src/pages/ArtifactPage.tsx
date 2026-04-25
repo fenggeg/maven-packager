@@ -105,8 +105,8 @@ export function ArtifactPage() {
               <Space direction="vertical" size={2} style={{maxWidth: '100%'}}>
                 <Space size={6} wrap>
                   <Text strong style={{fontSize: 14}}>{artifact.fileName}</Text>
-                  <Tag size="small">{artifact.extension}</Tag>
-                  <Tag size="small" color="green">{formatSize(artifact.sizeBytes)}</Tag>
+                  <Tag>{artifact.extension}</Tag>
+                  <Tag color="green">{formatSize(artifact.sizeBytes)}</Tag>
                 </Space>
                 <Text type="secondary" style={{fontSize: 12, lineHeight: '16px'}}>
                   {artifact.modulePath || '根项目'}

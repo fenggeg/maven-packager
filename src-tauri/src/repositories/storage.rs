@@ -45,27 +45,6 @@ fn initialize_database(connection: &Connection) -> AppResult<()> {
                 payload TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS task_pipelines (
-                id TEXT PRIMARY KEY NOT NULL,
-                name TEXT NOT NULL,
-                created_at TEXT,
-                updated_at TEXT,
-                payload TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_task_pipelines_name
-                ON task_pipelines(name ASC);
-
-            CREATE TABLE IF NOT EXISTS task_pipeline_runs (
-                id TEXT PRIMARY KEY NOT NULL,
-                pipeline_id TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                payload TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_task_pipeline_runs_started_at
-                ON task_pipeline_runs(started_at DESC);
-
             CREATE TABLE IF NOT EXISTS server_profiles (
                 id TEXT PRIMARY KEY NOT NULL,
                 name TEXT NOT NULL,

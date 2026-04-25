@@ -1,10 +1,10 @@
 import {create} from 'zustand'
 
-export type AppPage = 'build' | 'artifacts' | 'deployment' | 'services' | 'environment' | 'history' | 'settings'
+export type AppPage = 'build' | 'artifacts' | 'deployment' | 'services' | 'environment' | 'history'
 
 export type InspectorTab = 'logs' | 'diagnosis' | 'details'
 
-export type InspectorLogSource = 'build' | 'pipeline' | 'deployment'
+export type InspectorLogSource = 'build' | 'deployment'
 
 interface NavigationState {
   activePage: AppPage

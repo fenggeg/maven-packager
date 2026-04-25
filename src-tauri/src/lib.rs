@@ -50,11 +50,6 @@ pub fn run() {
             commands::template::list_templates,
             commands::template::save_template,
             commands::template::delete_template,
-            commands::task_pipeline::list_task_pipelines,
-            commands::task_pipeline::save_task_pipeline,
-            commands::task_pipeline::delete_task_pipeline,
-            commands::task_pipeline::list_task_pipeline_runs,
-            commands::task_pipeline::start_task_pipeline,
             commands::deployment::list_server_profiles,
             commands::deployment::save_server_profile,
             commands::deployment::delete_server_profile,
@@ -65,7 +60,6 @@ pub fn run() {
             commands::deployment::start_deployment,
             commands::deployment::cancel_deployment,
             commands::deployment::delete_deployment_task,
-            commands::task_pipeline::delete_task_pipeline_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 pub struct CommandResult {
     pub output: String,
+    pub exit_status: i32,
 }
 
 /// A reusable SSH connection that avoids creating new TCP+handshake+auth for each command.
@@ -47,6 +48,19 @@ impl SshConnection {
     pub fn execute_with_cancel<C>(
         &self,
         command: &str,
+        mut is_cancelled: C,
+    ) -> AppResult<CommandResult>
+    where
+        C: FnMut() -> bool,
+    {
+        self.execute_allowing_status(command, &[], &mut is_cancelled)
+    }
+
+    /// Execute a remote command and treat the provided exit codes as successful.
+    pub fn execute_allowing_status<C>(
+        &self,
+        command: &str,
+        success_exit_codes: &[i32],
         mut is_cancelled: C,
     ) -> AppResult<CommandResult>
     where
@@ -117,7 +131,7 @@ impl SshConnection {
             .exit_status()
             .map_err(|error| to_user_error(format!("读取远端命令退出码失败：{}", error)))?;
 
-        parse_command_bytes(stdout, stderr, exit_status, "远端命令执行失败")
+        parse_command_bytes(stdout, stderr, exit_status, success_exit_codes, "远端命令执行失败")
     }
 
     /// Upload a file via SCP with progress reporting and cancellation support.
@@ -241,19 +255,28 @@ fn parse_command_bytes(
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     exit_status: i32,
+    success_exit_codes: &[i32],
     fallback: &str,
 ) -> AppResult<CommandResult> {
     let combined = format!("{}{}", decode_output(&stdout), decode_output(&stderr))
         .trim()
         .to_string();
-    if exit_status != 0 {
+    let success_codes = if success_exit_codes.is_empty() {
+        &[0][..]
+    } else {
+        success_exit_codes
+    };
+    if !success_codes.contains(&exit_status) {
         return Err(to_user_error(if combined.is_empty() {
             fallback.to_string()
         } else {
             combined
         }));
     }
-    Ok(CommandResult { output: combined })
+    Ok(CommandResult {
+        output: combined,
+        exit_status,
+    })
 }
 
 fn decode_output(bytes: &[u8]) -> String {

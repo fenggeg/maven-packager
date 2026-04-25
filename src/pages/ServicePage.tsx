@@ -34,6 +34,40 @@ const statusLabel = (status: DeploymentTask['status']) => {
   }
 }
 
+const stepTypeLabel = (type?: string) => {
+  switch (type) {
+    case 'ssh_command': return 'SSH 命令'
+    case 'wait': return '等待'
+    case 'port_check': return '端口检测'
+    case 'http_check': return 'HTTP 健康检查'
+    case 'log_check': return '日志关键字检测'
+    case 'upload_file': return '文件上传'
+    default: return type ?? '-'
+  }
+}
+
+const stageStatusLabel = (status: string) => {
+  switch (status) {
+    case 'pending': return '等待中'
+    case 'waiting': return '等待中'
+    case 'running': return '执行中'
+    case 'checking': return '检测中'
+    case 'success': return '成功'
+    case 'failed': return '失败'
+    case 'skipped': return '已跳过'
+    case 'timeout': return '已超时'
+    case 'cancelled': return '已取消'
+    default: return status
+  }
+}
+
+const formatDuration = (durationMs?: number) => {
+  if (!durationMs) {
+    return '-'
+  }
+  return durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`
+}
+
 const classifyLine = (line: string) => {
   const lower = line.toLowerCase()
   if (lower.includes('部署完成') || lower.includes('已替换') || lower.includes('健康检查通过')) {
@@ -128,7 +162,7 @@ export function ServicePage() {
                 title={(
                   <Space size={8}>
                     <span>{profile.name}</span>
-                    <Tag size="small">{moduleName}</Tag>
+                    <Tag>{moduleName}</Tag>
                   </Space>
                 )}
                 className="panel-card"
@@ -147,8 +181,10 @@ export function ServicePage() {
                   <Descriptions size="small" column={3}>
                     <Descriptions.Item label="产物匹配">{profile.localArtifactPattern}</Descriptions.Item>
                     <Descriptions.Item label="远程目录">{profile.remoteDeployPath}</Descriptions.Item>
-                    <Descriptions.Item label="命令">
-                      {profile.customCommands.filter((c) => c.enabled).length} 条启用
+                    <Descriptions.Item label="部署流程">
+                      {profile.deploymentSteps?.length
+                        ? `${profile.deploymentSteps.filter((step) => step.enabled).length}/${profile.deploymentSteps.length} 个步骤启用`
+                        : `${profile.customCommands.filter((c) => c.enabled).length} 条旧版命令启用`}
                     </Descriptions.Item>
                   </Descriptions>
                   {serverProfiles.length === 0 ? (
@@ -265,10 +301,22 @@ export function ServicePage() {
               columns={[
                 {title: '阶段', dataIndex: 'label', width: 140},
                 {
+                  title: '类型',
+                  dataIndex: 'type',
+                  width: 120,
+                  render: (value: string) => stepTypeLabel(value),
+                },
+                {
                   title: '状态',
                   dataIndex: 'status',
                   width: 100,
-                  render: (value: string) => <Tag>{value}</Tag>,
+                  render: (value: string) => <Tag>{stageStatusLabel(value)}</Tag>,
+                },
+                {
+                  title: '耗时',
+                  dataIndex: 'durationMs',
+                  width: 90,
+                  render: (value: number | undefined) => formatDuration(value),
                 },
                 {
                   title: '结果',

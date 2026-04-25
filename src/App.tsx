@@ -1,7 +1,7 @@
 import {useEffect} from 'react'
 import {App as AntApp, ConfigProvider, theme} from 'antd'
 import {AppShell} from './app/AppShell'
-import {registerBuildEvents, registerDeploymentEvents, registerTaskPipelineEvents} from './services/tauri-api'
+import {registerBuildEvents, registerDeploymentEvents} from './services/tauri-api'
 import {useAppStore} from './store/useAppStore'
 import {useWorkflowStore} from './store/useWorkflowStore'
 import './App.css'
@@ -14,9 +14,6 @@ function App() {
   const initializeWorkflow = useWorkflowStore((state) => state.initialize)
   const loadDependencyGraph = useWorkflowStore((state) => state.loadDependencyGraph)
   const clearDependencyGraph = useWorkflowStore((state) => state.clearDependencyGraph)
-  const appendTaskPipelineLog = useWorkflowStore((state) => state.appendTaskPipelineLog)
-  const updateTaskPipelineStep = useWorkflowStore((state) => state.updateTaskPipelineStep)
-  const finishTaskPipeline = useWorkflowStore((state) => state.finishTaskPipeline)
   const appendDeploymentLog = useWorkflowStore((state) => state.appendDeploymentLog)
   const updateDeploymentTask = useWorkflowStore((state) => state.updateDeploymentTask)
   const finishDeploymentTask = useWorkflowStore((state) => state.finishDeploymentTask)
@@ -26,7 +23,6 @@ function App() {
     void initializeWorkflow()
 
     let cleanupBuild: (() => void) | undefined
-    let cleanupPipeline: (() => void) | undefined
     let cleanupDeployment: (() => void) | undefined
     let disposed = false
 
@@ -36,17 +32,6 @@ function App() {
         return
       }
       cleanupBuild = unlisten
-    })
-    void registerTaskPipelineEvents(
-      appendTaskPipelineLog,
-      updateTaskPipelineStep,
-      finishTaskPipeline,
-    ).then((unlisten) => {
-      if (disposed) {
-        unlisten()
-        return
-      }
-      cleanupPipeline = unlisten
     })
     void registerDeploymentEvents(
       appendDeploymentLog,
@@ -63,20 +48,16 @@ function App() {
     return () => {
       disposed = true
       cleanupBuild?.()
-      cleanupPipeline?.()
       cleanupDeployment?.()
     }
   }, [
     appendBuildLog,
     appendDeploymentLog,
-    appendTaskPipelineLog,
     finishBuild,
     finishDeploymentTask,
-    finishTaskPipeline,
     initialize,
     initializeWorkflow,
     updateDeploymentTask,
-    updateTaskPipelineStep,
   ])
 
   useEffect(() => {

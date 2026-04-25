@@ -266,69 +266,6 @@ export interface BuildTemplate {
   pinned?: boolean
 }
 
-export type TaskStepType = 'maven_goal' | 'shell_command' | 'open_directory' | 'notify'
-
-export interface TaskStep {
-  id: string
-  type: TaskStepType
-  label: string
-  enabled: boolean
-  payload: Record<string, unknown>
-}
-
-export interface TaskPipeline {
-  id: string
-  name: string
-  moduleIds: string[]
-  steps: TaskStep[]
-  createdAt?: string
-  updatedAt?: string
-}
-
-export type TaskStepRunStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped'
-
-export interface TaskStepRun {
-  stepId: string
-  label: string
-  type: TaskStepType | string
-  status: TaskStepRunStatus
-  startedAt?: string
-  finishedAt?: string
-  message?: string
-  output: string[]
-}
-
-export interface TaskPipelineRun {
-  id: string
-  pipelineId: string
-  pipelineName: string
-  projectRoot: string
-  moduleIds: string[]
-  status: 'running' | 'success' | 'failed'
-  totalDurationMs: number
-  startedAt: string
-  finishedAt?: string
-  steps: TaskStepRun[]
-}
-
-export interface TaskPipelineLogEvent {
-  runId: string
-  stepId?: string
-  level: 'info' | 'error' | string
-  line: string
-}
-
-export interface TaskPipelineStepEvent {
-  runId: string
-  step: TaskStepRun
-}
-
-export interface StartTaskPipelinePayload {
-  pipeline: TaskPipeline
-  projectRoot: string
-  environment: BuildEnvironment
-}
-
 export interface EnvironmentSettings {
   activeProfileId?: string
   profiles: EnvironmentProfile[]
@@ -392,12 +329,70 @@ export interface DeploymentCustomCommand {
   stage: DeploymentCustomCommandStage
 }
 
+export type DeployStepType =
+  | 'ssh_command'
+  | 'wait'
+  | 'port_check'
+  | 'http_check'
+  | 'log_check'
+  | 'upload_file'
+
+export type DeployFailureStrategy = 'stop' | 'continue' | 'rollback'
+
+export type DeployStepConfig =
+  | {
+      command: string
+      successExitCodes?: number[]
+    }
+  | {
+      waitSeconds: number
+    }
+  | {
+      host: string
+      port: number
+      checkIntervalSeconds: number
+    }
+  | {
+      url: string
+      method: 'GET' | 'POST'
+      headers?: Record<string, string>
+      body?: string
+      expectedStatusCodes?: number[]
+      expectedBodyContains?: string
+      checkIntervalSeconds: number
+    }
+  | {
+      logPath: string
+      successKeywords: string[]
+      failureKeywords?: string[]
+      checkIntervalSeconds: number
+    }
+  | {
+      localPath: string
+      remotePath: string
+      overwrite: boolean
+    }
+
+export interface DeployStep {
+  id: string
+  enabled: boolean
+  name: string
+  type: DeployStepType
+  order: number
+  timeoutSeconds?: number
+  retryCount?: number
+  retryIntervalSeconds?: number
+  failureStrategy?: DeployFailureStrategy
+  config: DeployStepConfig
+}
+
 export interface DeploymentProfile {
   id: string
   name: string
   moduleId: string
   localArtifactPattern: string
   remoteDeployPath: string
+  deploymentSteps: DeployStep[]
   customCommands: DeploymentCustomCommand[]
   createdAt?: string
   updatedAt?: string
@@ -406,10 +401,15 @@ export interface DeploymentProfile {
 export interface DeploymentStage {
   key: string
   label: string
-  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'cancelled'
+  type?: DeployStepType | string
+  status: 'pending' | 'waiting' | 'running' | 'checking' | 'success' | 'failed' | 'skipped' | 'timeout' | 'cancelled'
   startedAt?: string
   finishedAt?: string
   message?: string
+  retryCount?: number
+  currentRetry?: number
+  durationMs?: number
+  logs?: string[]
 }
 
 export interface DeploymentTask {

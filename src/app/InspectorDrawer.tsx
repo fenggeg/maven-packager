@@ -38,7 +38,6 @@ export function InspectorDrawer() {
   const artifacts = useAppStore((state) => state.artifacts)
   const selectedModules = useAppStore((state) => state.selectedModules)
   const currentDeploymentTask = useWorkflowStore((state) => state.currentDeploymentTask)
-  const currentTaskPipelineRun = useWorkflowStore((state) => state.currentTaskPipelineRun)
   const serverProfiles = useWorkflowStore((state) => state.serverProfiles)
   const deploymentProfiles = useWorkflowStore((state) => state.deploymentProfiles)
   const [expanded, setExpanded] = useState(false)
@@ -59,12 +58,7 @@ export function InspectorDrawer() {
       setInspectorTab('logs')
       setInspectorLogSource('deployment')
     }
-    if (currentTaskPipelineRun?.status === 'running') {
-      setInspectorOpen(true)
-      setInspectorTab('logs')
-      setInspectorLogSource('pipeline')
-    }
-  }, [buildStatus, currentDeploymentTask?.status, currentTaskPipelineRun?.status, setInspectorOpen, setInspectorTab, setInspectorLogSource])
+  }, [buildStatus, currentDeploymentTask?.status, setInspectorOpen, setInspectorTab, setInspectorLogSource])
 
   const diagnosisText = useMemo(() => {
     if (!diagnosis) {
@@ -124,43 +118,6 @@ export function InspectorDrawer() {
       )
     }
 
-    if (inspectorLogSource === 'pipeline') {
-      const run = currentTaskPipelineRun
-      const failedStep = run?.steps.find((s) => s.status === 'failed')
-      return (
-        <Card title="任务链诊断" className="panel-card" size="small">
-          {!run ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行中的任务链" />
-          ) : (
-            <Space direction="vertical" size={10} style={{width: '100%'}}>
-              <Space size={8} wrap>
-                <Tag color={run.status === 'running' ? 'processing' : run.status === 'success' ? 'success' : 'error'}>
-                  {run.status === 'running' ? '执行中' : run.status === 'success' ? '已完成' : '已失败'}
-                </Tag>
-                <Text strong>{run.pipelineName}</Text>
-              </Space>
-              <Text type="secondary">
-                步骤进度：{run.steps.filter((s) => s.status === 'success').length} / {run.steps.length}
-              </Text>
-              {failedStep && (
-                <>
-                  <Text strong type="danger">失败步骤：{failedStep.label}</Text>
-                  {failedStep.output && failedStep.output.length > 0 && (
-                    <div className="diagnosis-keyword-lines">
-                      {failedStep.output.slice(-6).map((line, index) => (
-                        <pre key={`${failedStep.stepId}-${index}`}>{line}</pre>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-            </Space>
-          )}
-        </Card>
-      )
-    }
-
-    // deployment
     const task = currentDeploymentTask
     const currentStage = task?.stages.find((s) => s.status === 'running') ?? task?.stages.find((s) => s.status === 'failed')
     const server = serverProfiles.find((s) => s.id === task?.serverId)
@@ -197,7 +154,7 @@ export function InspectorDrawer() {
         )}
       </Card>
     )
-  }, [inspectorLogSource, diagnosis, diagnosisText, currentTaskPipelineRun, currentDeploymentTask, serverProfiles, deploymentProfiles])
+  }, [inspectorLogSource, diagnosis, diagnosisText, currentDeploymentTask, serverProfiles, deploymentProfiles])
 
   // ---- Dynamic details content based on log source ----
   const detailsContent = useMemo(() => {
@@ -214,27 +171,6 @@ export function InspectorDrawer() {
       )
     }
 
-    if (inspectorLogSource === 'pipeline') {
-      const run = currentTaskPipelineRun
-      return (
-        <Card title="任务链上下文" className="panel-card" size="small">
-          {!run ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无任务链运行记录" />
-          ) : (
-            <Space direction="vertical" size={8} style={{width: '100%'}}>
-              <Text type="secondary">任务链：{run.pipelineName}</Text>
-              <Text type="secondary">状态：{run.status}</Text>
-              <Text type="secondary">总步骤：{run.steps.length}</Text>
-              <Text type="secondary">成功步骤：{run.steps.filter((s) => s.status === 'success').length}</Text>
-              <Text type="secondary">失败步骤：{run.steps.filter((s) => s.status === 'failed').length}</Text>
-              <Text type="secondary">跳过步骤：{run.steps.filter((s) => s.status === 'skipped').length}</Text>
-            </Space>
-          )}
-        </Card>
-      )
-    }
-
-    // deployment
     const task = currentDeploymentTask
     const server = serverProfiles.find((s) => s.id === task?.serverId)
     const profile = deploymentProfiles.find((p) => p.id === task?.deploymentProfileId)
@@ -263,7 +199,7 @@ export function InspectorDrawer() {
         )}
       </Card>
     )
-  }, [inspectorLogSource, buildStatus, logs.length, selectedModules.length, artifacts.length, currentTaskPipelineRun, currentDeploymentTask, serverProfiles, deploymentProfiles])
+  }, [inspectorLogSource, buildStatus, logs.length, selectedModules.length, artifacts.length, currentDeploymentTask, serverProfiles, deploymentProfiles])
 
   if (!inspectorOpen) {
     return (
@@ -311,12 +247,12 @@ export function InspectorDrawer() {
           },
           {
             key: 'diagnosis',
-            label: inspectorLogSource === 'build' ? '构建诊断' : inspectorLogSource === 'pipeline' ? '任务链诊断' : '部署诊断',
+            label: inspectorLogSource === 'build' ? '构建诊断' : '部署诊断',
             children: diagnosisContent,
           },
           {
             key: 'details',
-            label: inspectorLogSource === 'build' ? '构建详情' : inspectorLogSource === 'pipeline' ? '任务链详情' : '部署详情',
+            label: inspectorLogSource === 'build' ? '构建详情' : '部署详情',
             children: detailsContent,
           },
         ]}

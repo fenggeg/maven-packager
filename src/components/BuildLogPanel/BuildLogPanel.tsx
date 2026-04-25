@@ -1,9 +1,9 @@
 import {
-    CopyOutlined,
-    DeleteOutlined,
-    FullscreenOutlined,
-    PauseCircleOutlined,
-    PlayCircleOutlined
+  CopyOutlined,
+  DeleteOutlined,
+  FullscreenOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined
 } from '@ant-design/icons'
 import {Button, Card, Input, List, Modal, Radio, Space, Tag, Tooltip, Typography} from 'antd'
 import {useEffect, useRef, useState} from 'react'
@@ -14,7 +14,7 @@ import type {BuildDiagnosis, BuildLogEvent, BuildStatus} from '../../types/domai
 
 const { Text } = Typography
 
-type LogSource = 'build' | 'pipeline' | 'deployment'
+type LogSource = 'build' | 'deployment'
 
 const statusText: Record<BuildStatus, string> = {
   IDLE: '未开始',
@@ -67,10 +67,10 @@ const classifyBuildLog = (event: BuildLogEvent) => {
 
 const classifyLine = (line: string) => {
   const lower = line.toLowerCase()
-  if (lower.includes('build success') || lower.includes('任务链执行完成') || lower.includes('步骤完成') || lower.includes('exit code 0') || lower.includes('部署完成')) {
+  if (lower.includes('build success') || lower.includes('exit code 0') || lower.includes('部署完成')) {
     return 'success'
   }
-  if (lower.includes('[error]') || lower.includes('build failure') || lower.includes('任务链') && lower.includes('失败') || lower.includes('命令执行失败') || lower.includes('部署失败')) {
+  if (lower.includes('[error]') || lower.includes('build failure') || lower.includes('命令执行失败') || lower.includes('部署失败')) {
     return 'error'
   }
   if (lower.includes('[warning]') || lower.includes('warn')) {
@@ -89,10 +89,6 @@ export function BuildLogPanel() {
   const cancelBuild = useAppStore((state) => state.cancelBuild)
   const clearBuildLogs = useAppStore((state) => state.clearBuildLogs)
 
-  // Pipeline logs
-  const currentTaskPipelineRun = useWorkflowStore((state) => state.currentTaskPipelineRun)
-  const taskPipelineLogsByRunId = useWorkflowStore((state) => state.taskPipelineLogsByRunId)
-
   // Deployment logs
   const currentDeploymentTask = useWorkflowStore((state) => state.currentDeploymentTask)
   const deploymentLogsByTaskId = useWorkflowStore((state) => state.deploymentLogsByTaskId)
@@ -110,15 +106,11 @@ export function BuildLogPanel() {
   // Alias for local readability
   const setActiveSourceLocal = (source: LogSource) => setActiveSource(source)
 
-  // Get current log lines based on active source
-  const pipelineRunId = currentTaskPipelineRun?.id
-  const pipelineLogs = taskPipelineLogsByRunId[pipelineRunId ?? ''] ?? []
   const deploymentTaskId = currentDeploymentTask?.id
   const deploymentLogs = deploymentLogsByTaskId[deploymentTaskId ?? ''] ?? []
 
   const lastLaunchRef = useRef<{
     buildStartedAt?: number
-    pipelineRunId?: string
     deploymentTaskId?: string
   }>({})
 
@@ -129,16 +121,12 @@ export function BuildLogPanel() {
     if (buildStartedAt && buildStatus === 'RUNNING' && buildStartedAt !== previous.buildStartedAt) {
       nextSource = 'build'
     }
-    if (pipelineRunId && currentTaskPipelineRun?.status === 'running' && pipelineRunId !== previous.pipelineRunId) {
-      nextSource = 'pipeline'
-    }
     if (deploymentTaskId && isDeploymentRunning && deploymentTaskId !== previous.deploymentTaskId) {
       nextSource = 'deployment'
     }
 
     lastLaunchRef.current = {
       buildStartedAt,
-      pipelineRunId,
       deploymentTaskId,
     }
 
@@ -148,14 +136,12 @@ export function BuildLogPanel() {
   }, [
     buildStartedAt,
     buildStatus,
-    currentTaskPipelineRun?.status,
     deploymentTaskId,
     isDeploymentRunning,
-    pipelineRunId,
     setActiveSource,
   ])
 
-  const currentLogCount = activeSource === 'build' ? logs.length : activeSource === 'pipeline' ? pipelineLogs.length : deploymentLogs.length
+  const currentLogCount = activeSource === 'build' ? logs.length : deploymentLogs.length
 
   // Auto-scroll
   useEffect(() => {
@@ -171,10 +157,6 @@ export function BuildLogPanel() {
   const visibleBuildLogs = keyword.trim()
     ? logs.filter((event) => event.line.toLowerCase().includes(keyword.trim().toLowerCase()))
     : logs
-
-  const visiblePipelineLogs = keyword.trim()
-    ? pipelineLogs.filter((line) => line.toLowerCase().includes(keyword.trim().toLowerCase()))
-    : pipelineLogs
 
   const visibleDeploymentLogs = keyword.trim()
     ? deploymentLogs.filter((line) => line.toLowerCase().includes(keyword.trim().toLowerCase()))
@@ -196,22 +178,6 @@ export function BuildLogPanel() {
       )
     }
 
-    if (activeSource === 'pipeline') {
-      return visiblePipelineLogs.length === 0 ? (
-        <div className="log-empty">
-          <Text>暂无任务链日志</Text>
-          <Text type="secondary">执行任务链后日志将在此实时展示。</Text>
-        </div>
-      ) : (
-        visiblePipelineLogs.map((line, index) => (
-          <pre className={`log-line ${classifyLine(line)}`} key={`pl-${index}`}>
-            {line}
-          </pre>
-        ))
-      )
-    }
-
-    // deployment
     return visibleDeploymentLogs.length === 0 ? (
       <div className="log-empty">
         <Text>暂无部署日志</Text>
@@ -230,8 +196,6 @@ export function BuildLogPanel() {
     let text = ''
     if (activeSource === 'build') {
       text = logs.map((event) => event.line).join('\n')
-    } else if (activeSource === 'pipeline') {
-      text = pipelineLogs.join('\n')
     } else {
       text = deploymentLogs.join('\n')
     }
@@ -242,25 +206,13 @@ export function BuildLogPanel() {
     if (activeSource === 'build') {
       clearBuildLogs()
     }
-    // Pipeline and deployment logs are managed by their respective flows
+    // Deployment logs are managed by deployment flows
   }
 
   // Build status tag for header
   const renderStatusTag = () => {
     if (activeSource === 'build') {
       return <Tag color={statusColor[buildStatus]}>{statusText[buildStatus]}</Tag>
-    }
-    if (activeSource === 'pipeline' && currentTaskPipelineRun) {
-      const isRunning = currentTaskPipelineRun.status === 'running'
-      const color = isRunning ? 'processing' : currentTaskPipelineRun.status === 'success' ? 'success' : 'error'
-      const label = isRunning ? '执行中' : currentTaskPipelineRun.status === 'success' ? '已完成' : '已失败'
-      return (
-        <Tag color={color}>
-          {currentTaskPipelineRun.pipelineName}
-          {isRunning ? ` · ${currentTaskPipelineRun.steps.filter((s) => s.status === 'success').length}/${currentTaskPipelineRun.steps.length}` : ''}
-          {' '}{label}
-        </Tag>
-      )
     }
     if (activeSource === 'deployment' && currentDeploymentTask) {
       const isRunning = !['success', 'failed', 'cancelled'].includes(currentDeploymentTask.status)
@@ -352,7 +304,6 @@ export function BuildLogPanel() {
           style={{ marginBottom: 8 }}
         >
           <Radio.Button value="build">构建</Radio.Button>
-          <Radio.Button value="pipeline">任务链</Radio.Button>
           <Radio.Button value="deployment">部署</Radio.Button>
         </Radio.Group>
         <Input
@@ -367,7 +318,7 @@ export function BuildLogPanel() {
           {renderContent()}
         </div>
         <Modal
-          title={`日志输出 · ${activeSource === 'build' ? '构建' : activeSource === 'pipeline' ? '任务链' : '部署'}`}
+          title={`日志输出 · ${activeSource === 'build' ? '构建' : '部署'}`}
           open={expanded}
           footer={null}
           width="88vw"

@@ -4,7 +4,6 @@ import {
     CloudServerOutlined,
     DatabaseOutlined,
     HistoryOutlined,
-    SettingOutlined,
     ToolOutlined,
 } from '@ant-design/icons'
 import {Badge, Button, Tooltip} from 'antd'
@@ -20,7 +19,6 @@ const pageItems: Array<{key: AppPage; label: string; icon: ReactNode}> = [
   {key: 'services', label: '服务', icon: <AppstoreOutlined />},
   {key: 'environment', label: '环境', icon: <ToolOutlined />},
   {key: 'history', label: '历史', icon: <HistoryOutlined />},
-  {key: 'settings', label: '设置', icon: <SettingOutlined />},
 ]
 
 const hasRunningDeployment = (status?: string) =>
