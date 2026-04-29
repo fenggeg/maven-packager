@@ -1,6 +1,7 @@
 import {create} from 'zustand'
 import {api, createDefaultBuildOptions, selectProjectDirectory} from '../services/tauri-api'
 import {diagnoseBuildFailure} from '../services/buildDiagnosisService'
+import {appendBoundedItems} from '../utils/boundedBuffer'
 import type {
     BuildArtifact,
     BuildDiagnosis,
@@ -140,14 +141,11 @@ const appendSystemLog = (
   logs: BuildLogEvent[],
   buildId: string | undefined,
   line: string,
-): BuildLogEvent[] => [
-  ...logs.slice(-4999),
-  {
-    buildId: buildId ?? 'pending',
-    stream: 'system',
-    line,
-  },
-]
+): BuildLogEvent[] => appendBoundedItems(logs, [{
+  buildId: buildId ?? 'pending',
+  stream: 'system',
+  line,
+}], 5000)
 
 const createProfileFromEnvironment = (
   name: string,
@@ -838,7 +836,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       logs: isSameBuildLogLine(state.logs.at(-1), event)
         ? state.logs
-        : [...state.logs.slice(-4999), event],
+        : appendBoundedItems(state.logs, [event], 5000),
     }))
   },
 

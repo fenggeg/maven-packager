@@ -311,25 +311,34 @@ fn execute_deployment(
         .filter(|value| !value.trim().is_empty())
         .map(|value| value.to_string());
     let privilege = server.privilege.clone();
-    let remote_upload_dir = resolve_upload_temp_dir(
-        &privilege.upload_temp_dir,
-        task_id,
-        &server.username,
-        &privilege.run_as_user,
-        &remote_artifact_name,
-    );
-    let remote_upload_path = format!(
-        "{}/{}",
-        normalize_remote_dir(&remote_upload_dir),
-        remote_artifact_name
-    );
+    let remote_deploy_path = normalize_remote_dir(&profile.remote_deploy_path);
+    let privilege_enabled = privilege.mode.trim() != "none";
+    let (remote_upload_dir, remote_upload_path) = if privilege_enabled {
+        let upload_dir = resolve_upload_temp_dir(
+            &privilege.upload_temp_dir,
+            task_id,
+            &server.username,
+            &privilege.run_as_user,
+            &remote_artifact_name,
+        );
+        let normalized_upload_dir = normalize_remote_dir(&upload_dir);
+        (
+            normalized_upload_dir.clone(),
+            format!("{}/{}", normalized_upload_dir, remote_artifact_name),
+        )
+    } else {
+        (
+            remote_deploy_path.clone(),
+            format!("{}/.{}.uploading", remote_deploy_path, artifact_name),
+        )
+    };
     let context = DeploymentContext {
         deployment_id: task_id.to_string(),
         artifact_path: payload.local_artifact_path.clone(),
         artifact_name: artifact_name.clone(),
         remote_artifact_name,
-        remote_deploy_path: normalize_remote_dir(&profile.remote_deploy_path),
-        remote_upload_dir: normalize_remote_dir(&remote_upload_dir),
+        remote_deploy_path,
+        remote_upload_dir,
         remote_upload_path,
         login_user: server.username.clone(),
         privilege,
@@ -819,6 +828,7 @@ fn execute_ssh_step(
     let run_post_stop_cleanup = is_stop_process_step(&step.name, &config.command);
     let command_template = normalize_legacy_builtin_command(&step.name, &config.command);
     let mut command = expand_tokens(&command_template, context);
+    command = ensure_replace_target_dir(&step.name, command, context);
     if let Some(timeout) = step.timeout_seconds.filter(|value| *value > 0) {
         command = format!("timeout {} sh -lc {}", timeout, shell_quote(&command));
     }
@@ -853,6 +863,27 @@ fn execute_ssh_step(
     } else {
         format!("{} 输出：{}", step.name, output)
     })
+}
+
+fn ensure_replace_target_dir(
+    step_name: &str,
+    command: String,
+    context: &DeploymentContext,
+) -> String {
+    let lower_name = step_name.to_ascii_lowercase();
+    let looks_like_replace =
+        step_name.contains("替换") || lower_name.contains("replace") || lower_name.contains("move");
+    if !looks_like_replace || !command.contains("mv ") || command.contains("mkdir -p") {
+        return command;
+    }
+    if !command.contains(&context.remote_deploy_path) {
+        return command;
+    }
+    format!(
+        "mkdir -p {deploy_dir} && {command}",
+        deploy_dir = shell_quote(&context.remote_deploy_path),
+        command = command
+    )
 }
 
 fn is_stop_process_step(step_name: &str, command: &str) -> bool {
@@ -1192,6 +1223,7 @@ fn execute_upload_step(
 
     let mut last_emit_percent: f64 = -100.0;
     let mut last_emit_time = Instant::now();
+    let mut next_milestone_percent: f64 = 25.0;
     let step_id = step.id.clone();
     conn.upload_file_with_progress(
         local,
@@ -1204,12 +1236,17 @@ fn execute_upload_step(
                 ((uploaded as f64) * 100.0 / total as f64).min(100.0)
             };
             let now = Instant::now();
+            let reached_milestone = percent >= next_milestone_percent;
             let should_emit = percent >= 100.0
                 || percent - last_emit_percent >= 2.0
-                || now.duration_since(last_emit_time) >= Duration::from_millis(200);
+                || reached_milestone
+                || now.duration_since(last_emit_time) >= Duration::from_millis(500);
             if should_emit {
                 last_emit_percent = percent;
                 last_emit_time = now;
+                while next_milestone_percent <= percent && next_milestone_percent < 100.0 {
+                    next_milestone_percent += 25.0;
+                }
                 let speed_text = speed_bps
                     .map(|s| format!(", {}", format_speed(s)))
                     .unwrap_or_default();
@@ -1990,19 +2027,24 @@ fn expand_tokens(value: &str, context: &DeploymentContext) -> String {
         .port_probe_port
         .map(|port| port.to_string())
         .unwrap_or_default();
-    value
-        .replace(
-            "${remoteDeployPath}/.${artifactName}.uploading",
-            &context.remote_upload_path,
-        )
-        .replace(
-            "${remoteDeployPath}/.${remoteArtifactName}.uploading",
-            &context.remote_upload_path,
-        )
-        .replace(
-            "${remoteDeployPath}/.${remoteArtifactBaseName}.uploading",
-            &context.remote_upload_path,
-        )
+    let resolved_upload_path = if uses_privilege(context) {
+        value
+            .replace(
+                "${remoteDeployPath}/.${artifactName}.uploading",
+                &context.remote_upload_path,
+            )
+            .replace(
+                "${remoteDeployPath}/.${remoteArtifactName}.uploading",
+                &context.remote_upload_path,
+            )
+            .replace(
+                "${remoteDeployPath}/.${remoteArtifactBaseName}.uploading",
+                &context.remote_upload_path,
+            )
+    } else {
+        value.to_string()
+    };
+    resolved_upload_path
         .replace("${remoteArtifactName%.*}", base_name)
         .replace("${artifactName%.*}", artifact_base_name(context))
         .replace("${artifactPath}", &context.artifact_path)

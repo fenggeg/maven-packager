@@ -1,14 +1,15 @@
 import {
-    CloudServerOutlined,
-    CopyOutlined,
-    DatabaseOutlined,
-    FileTextOutlined,
-    FullscreenOutlined,
-    RocketOutlined,
-    SearchOutlined
+  CloudServerOutlined,
+  CopyOutlined,
+  DatabaseOutlined,
+  FileTextOutlined,
+  FullscreenOutlined,
+  RocketOutlined,
+  SearchOutlined
 } from '@ant-design/icons'
 import {Button, Card, Descriptions, Empty, Input, Modal, Space, Table, Tag, Tooltip, Typography} from 'antd'
 import {useMemo, useState} from 'react'
+import {LogConsole} from '../components/common/LogConsole'
 import {belongsToProject, flattenModules, profileModuleLabel} from '../services/deploymentTopologyService'
 import {useAppStore} from '../store/useAppStore'
 import {useDeploymentLogStore} from '../store/useDeploymentLogStore'
@@ -88,7 +89,7 @@ const classifyLine = (line: string) => {
     return 'success'
   }
   if (lower.includes('停止')) {
-    return 'warning'
+    return 'warn'
   }
   if (lower.includes('失败') || lower.includes('错误') || lower.includes('error')) {
     return 'error'
@@ -102,7 +103,6 @@ export function ServicePage() {
   const deploymentProfiles = useWorkflowStore((state) => state.deploymentProfiles)
   const serverProfiles = useWorkflowStore((state) => state.serverProfiles)
   const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
-  const deploymentLogsByTaskId = useDeploymentLogStore((state) => state.logsByTaskId)
   const navigateToDeployment = useNavigationStore((state) => state.navigateToDeployment)
   const currentProjectDeploymentProfiles = useMemo(
     () => deploymentProfiles.filter((profile) => belongsToProject(profile, project?.rootPath)),
@@ -113,6 +113,9 @@ export function ServicePage() {
   const [logKeyword, setLogKeyword] = useState('')
   const [logExpanded, setLogExpanded] = useState(false)
   const [serverKeyword, setServerKeyword] = useState('')
+  const openTaskBufferedLogs = useDeploymentLogStore(
+    (state) => openTask ? state.logsByTaskId[openTask.id] : undefined,
+  )
 
   const latestTaskMap = useMemo(() => {
     const map = new Map<string, DeploymentTask>()
@@ -136,21 +139,17 @@ export function ServicePage() {
   const successCount = deploymentTasks.filter((t) => t.status === 'success').length
   const failedCount = deploymentTasks.filter((t) => t.status === 'failed').length
 
-  const openTaskLogs = openTask ? (deploymentLogsByTaskId[openTask.id] ?? openTask.log ?? []) : []
-  const filteredLogs = logKeyword.trim()
-    ? openTaskLogs.filter((line) => line.toLowerCase().includes(logKeyword.trim().toLowerCase()))
-    : openTaskLogs
-
-  const renderLogContent = () =>
-    filteredLogs.length === 0 ? (
-      '暂无部署日志'
-    ) : (
-      filteredLogs.map((line, index) => (
-        <pre className={`log-line ${classifyLine(line)}`} key={`dlog-${index}`}>
-          {line}
-        </pre>
-      ))
-    )
+  const openTaskLogs = useMemo(
+    () => openTask ? (openTaskBufferedLogs ?? openTask.log ?? []) : [],
+    [openTask, openTaskBufferedLogs],
+  )
+  const logKeywordValue = logKeyword.trim().toLowerCase()
+  const filteredLogs = useMemo(
+    () => logKeywordValue
+      ? openTaskLogs.filter((line) => line.toLowerCase().includes(logKeywordValue))
+      : openTaskLogs,
+    [logKeywordValue, openTaskLogs],
+  )
 
   return (
     <main className="workspace-page">
@@ -384,9 +383,13 @@ export function ServicePage() {
                 <Button size="small" icon={<FullscreenOutlined />} onClick={() => setLogExpanded(true)} />
               </Tooltip>
             </Space>
-            <div className="workflow-log-panel">
-              {renderLogContent()}
-            </div>
+            <LogConsole
+              className="workflow-log-panel"
+              lines={filteredLogs}
+              classifyLine={classifyLine}
+              emptyTitle="暂无部署日志"
+              keyPrefix="service-deployment-log"
+            />
             <Modal
               title={`部署日志 · ${openTask.deploymentProfileName ?? openTask.id}`}
               open={logExpanded}
@@ -394,9 +397,13 @@ export function ServicePage() {
               width="85vw"
               onCancel={() => setLogExpanded(false)}
             >
-              <div className="log-panel log-panel-large">
-                {renderLogContent()}
-              </div>
+              <LogConsole
+                className="log-panel log-panel-large"
+                lines={filteredLogs}
+                classifyLine={classifyLine}
+                emptyTitle="暂无部署日志"
+                keyPrefix="service-deployment-log-modal"
+              />
             </Modal>
           </Space>
         ) : null}

@@ -1,12 +1,13 @@
 import {create} from 'zustand'
 import type {DeploymentLogEvent} from '../types/domain'
+import {appendBoundedItems} from '../utils/boundedBuffer'
 
 const MAX_LOG_LINES = 3000
 const FLUSH_INTERVAL_MS = 300
+const pendingLogBuffer: Record<string, string[]> = {}
 
 interface DeploymentLogState {
   logsByTaskId: Record<string, string[]>
-  bufferByTaskId: Record<string, string[]>
   flushTimerId: ReturnType<typeof setInterval> | null
   appendLog: (event: DeploymentLogEvent) => void
   flushLogs: () => void
@@ -17,34 +18,27 @@ interface DeploymentLogState {
 
 export const useDeploymentLogStore = create<DeploymentLogState>((set, get) => ({
   logsByTaskId: {},
-  bufferByTaskId: {},
   flushTimerId: null,
 
   appendLog: (event) => {
-    set((state) => ({
-      bufferByTaskId: {
-        ...state.bufferByTaskId,
-        [event.taskId]: [...(state.bufferByTaskId[event.taskId] ?? []), event.line],
-      },
-    }))
+    pendingLogBuffer[event.taskId] = [...(pendingLogBuffer[event.taskId] ?? []), event.line]
   },
 
   flushLogs: () => {
-    const {bufferByTaskId} = get()
-    const taskIds = Object.keys(bufferByTaskId)
+    const taskIds = Object.keys(pendingLogBuffer)
     if (taskIds.length === 0) return
 
     set((state) => {
       const nextLogs = {...state.logsByTaskId}
       for (const taskId of taskIds) {
-        const buffered = bufferByTaskId[taskId]
+        const buffered = pendingLogBuffer[taskId]
         if (!buffered || buffered.length === 0) continue
         const existing = nextLogs[taskId] ?? []
-        nextLogs[taskId] = [...existing, ...buffered].slice(-MAX_LOG_LINES)
+        nextLogs[taskId] = appendBoundedItems(existing, buffered, MAX_LOG_LINES)
+        delete pendingLogBuffer[taskId]
       }
       return {
         logsByTaskId: nextLogs,
-        bufferByTaskId: {},
       }
     })
   },
@@ -52,10 +46,9 @@ export const useDeploymentLogStore = create<DeploymentLogState>((set, get) => ({
   clearLogs: (taskId) => {
     set((state) => {
       const nextLogs = {...state.logsByTaskId}
-      const nextBuffer = {...state.bufferByTaskId}
       delete nextLogs[taskId]
-      delete nextBuffer[taskId]
-      return {logsByTaskId: nextLogs, bufferByTaskId: nextBuffer}
+      delete pendingLogBuffer[taskId]
+      return {logsByTaskId: nextLogs}
     })
   },
 

@@ -1,4 +1,7 @@
 import {create} from 'zustand'
+import {shouldFlushUploadProgress, type UploadProgressSample} from '../services/deploymentRuntime'
+
+const lastProgressSamples: Record<string, UploadProgressSample> = {}
 
 export interface UploadProgress {
   taskId: string
@@ -20,6 +23,11 @@ export const useUploadProgressStore = create<UploadProgressState>((set) => ({
   progressByTaskId: {},
 
   updateProgress: (taskId, progress) => {
+    const nextSample = {percent: progress.percent, elapsedMs: performance.now()}
+    if (!shouldFlushUploadProgress(lastProgressSamples[taskId], nextSample)) {
+      return
+    }
+    lastProgressSamples[taskId] = nextSample
     set((state) => ({
       progressByTaskId: {
         ...state.progressByTaskId,
@@ -29,6 +37,7 @@ export const useUploadProgressStore = create<UploadProgressState>((set) => ({
   },
 
   clearProgress: (taskId) => {
+    delete lastProgressSamples[taskId]
     set((state) => {
       const next = {...state.progressByTaskId}
       delete next[taskId]

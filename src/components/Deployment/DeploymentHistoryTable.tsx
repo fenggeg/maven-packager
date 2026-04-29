@@ -1,21 +1,23 @@
 import {
-    Button,
-    Descriptions,
-    Empty,
-    Input,
-    Modal,
-    Popconfirm,
-    Progress,
-    Select,
-    Space,
-    Table,
-    Tag,
-    Tooltip,
-    Typography
+  Button,
+  Descriptions,
+  Empty,
+  Input,
+  Modal,
+  Popconfirm,
+  Progress,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Typography
 } from 'antd'
 import {CopyOutlined, DeleteOutlined, DownloadOutlined, FullscreenOutlined, PlayCircleOutlined} from '@ant-design/icons'
 import type {ColumnsType} from 'antd/es/table'
 import {useMemo, useRef, useState} from 'react'
+import {LogConsole} from '../common/LogConsole'
+import {summarizeDeploymentPipeline} from '../../services/deploymentRuntime'
 import {useDeploymentLogStore} from '../../store/useDeploymentLogStore'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
 import type {DeploymentStage, DeploymentTask, ProbeStatus} from '../../types/domain'
@@ -123,15 +125,6 @@ const formatDuration = (durationMs?: number) => {
   return durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`
 }
 
-const stageProgress = (stages: DeploymentStage[]) => {
-  const total = stages.length
-  if (total === 0) {
-    return {done: 0, total: 0, percent: 0}
-  }
-  const done = stages.filter((stage) => ['success', 'skipped'].includes(stage.status)).length
-  return {done, total, percent: Math.round((done / total) * 100)}
-}
-
 const getFailureReason = (task: DeploymentTask) =>
   task.stages.find((stage) => ['failed', 'timeout', 'cancelled'].includes(stage.status))?.message
   ?? task.log.find((line) => /失败|错误|error|timeout|超时/i.test(line))
@@ -143,7 +136,7 @@ const classifyLine = (line: string) => {
     return 'success'
   }
   if (lower.includes('停止')) {
-    return 'warning'
+    return 'warn'
   }
   if (lower.includes('失败') || lower.includes('错误') || lower.includes('error') || lower.includes('超时') || lower.includes('timeout')) {
     return 'error'
@@ -153,7 +146,6 @@ const classifyLine = (line: string) => {
 
 export function DeploymentHistoryTable() {
   const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
-  const deploymentLogsByTaskId = useDeploymentLogStore((state) => state.logsByTaskId)
   const deleteDeploymentTask = useWorkflowStore((state) => state.deleteDeploymentTask)
   const rerunDeployment = useWorkflowStore((state) => state.rerunDeployment)
   const [expanded, setExpanded] = useState(false)
@@ -162,6 +154,9 @@ export function DeploymentHistoryTable() {
   const [logFilter, setLogFilter] = useState<'all' | 'error' | 'warn' | 'success'>('all')
   const [logExpanded, setLogExpanded] = useState(false)
   const logModalPanelRef = useRef<HTMLDivElement>(null)
+  const openTaskBufferedLogs = useDeploymentLogStore(
+    (state) => openTask ? state.logsByTaskId[openTask.id] : undefined,
+  )
 
   const columns: ColumnsType<DeploymentTask> = useMemo(() => [
     {
@@ -199,7 +194,7 @@ export function DeploymentHistoryTable() {
       title: '流程进度',
       width: 138,
       render: (_, record) => {
-        const progress = stageProgress(record.stages)
+        const progress = summarizeDeploymentPipeline(record.stages)
         return (
           <Space direction="vertical" size={2} style={{width: '100%'}}>
             <Progress percent={progress.percent} size="small" showInfo={false} />
@@ -246,23 +241,16 @@ export function DeploymentHistoryTable() {
     },
   ], [deleteDeploymentTask, rerunDeployment])
 
-  const openTaskLogs = openTask ? (deploymentLogsByTaskId[openTask.id] ?? openTask.log ?? []) : []
-  const filteredLogs = openTaskLogs.filter((line) => {
+  const openTaskLogs = useMemo(
+    () => openTask ? (openTaskBufferedLogs ?? openTask.log ?? []) : [],
+    [openTask, openTaskBufferedLogs],
+  )
+  const logKeywordValue = logKeyword.trim().toLowerCase()
+  const filteredLogs = useMemo(() => openTaskLogs.filter((line) => {
     if (logFilter !== 'all' && classifyLine(line) !== logFilter) return false
-    if (logKeyword.trim() && !line.toLowerCase().includes(logKeyword.trim().toLowerCase())) return false
+    if (logKeywordValue && !line.toLowerCase().includes(logKeywordValue)) return false
     return true
-  })
-
-  const renderLogContent = () =>
-    filteredLogs.length === 0 ? (
-      '暂无部署日志'
-    ) : (
-      filteredLogs.map((line, index) => (
-        <pre className={`log-line ${classifyLine(line)}`} key={`dlog-${index}`}>
-          {line}
-        </pre>
-      ))
-    )
+  }), [logFilter, logKeywordValue, openTaskLogs])
 
   const table = (large = false) => (
     <Table
@@ -464,9 +452,13 @@ export function DeploymentHistoryTable() {
                 />
               </Tooltip>
             </Space>
-            <div className="workflow-log-panel">
-              {renderLogContent()}
-            </div>
+            <LogConsole
+              className="workflow-log-panel"
+              lines={filteredLogs}
+              classifyLine={classifyLine}
+              emptyTitle="暂无部署日志"
+              keyPrefix="history-deployment-log"
+            />
             <Modal
               title={`部署日志 · ${openTask.deploymentProfileName ?? openTask.id}`}
               open={logExpanded}
@@ -474,9 +466,14 @@ export function DeploymentHistoryTable() {
               width="85vw"
               onCancel={() => setLogExpanded(false)}
             >
-              <div className="log-panel log-panel-large" ref={logModalPanelRef}>
-                {renderLogContent()}
-              </div>
+              <LogConsole
+                ref={logModalPanelRef}
+                className="log-panel log-panel-large"
+                lines={filteredLogs}
+                classifyLine={classifyLine}
+                emptyTitle="暂无部署日志"
+                keyPrefix="history-deployment-log-modal"
+              />
             </Modal>
           </>
         ) : null}

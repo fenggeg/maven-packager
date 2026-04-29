@@ -49,6 +49,7 @@ import {
   normalizeProjectRoot,
   profileModuleLabel,
 } from '../../services/deploymentTopologyService'
+import {summarizeDeploymentPipeline} from '../../services/deploymentRuntime'
 import {api, selectLocalFile} from '../../services/tauri-api'
 import {useAppStore} from '../../store/useAppStore'
 import {useNavigationStore} from '../../store/navigationStore'
@@ -354,7 +355,7 @@ const createSpringBootJarSteps = (): DeployStep[] => {
   steps[1].config = {command: 'if [ -f "${remoteDeployPath}/${remoteArtifactName}" ]; then cp -f "${remoteDeployPath}/${remoteArtifactName}" "${remoteDeployPath}/${remoteArtifactName}.${timestamp}"; fi', successExitCodes: [0]}
   steps[2].config = {command: springBootStopCommand, successExitCodes: [0]}
   steps[3].config = {waitSeconds: 3}
-  steps[4].config = {command: 'mv -f "${remoteDeployPath}/.${artifactName}.uploading" "${remoteDeployPath}/${remoteArtifactName}"', successExitCodes: [0]}
+  steps[4].config = {command: 'mkdir -p "${remoteDeployPath}" && mv -f "${remoteDeployPath}/.${artifactName}.uploading" "${remoteDeployPath}/${remoteArtifactName}"', successExitCodes: [0]}
   steps[5].config = {command: springBootStartCommand, successExitCodes: [0]}
   return steps
 }
@@ -561,15 +562,7 @@ const defaultDeploymentStages: DeploymentStage[] = [
 ]
 
 const deploymentProgressCurrent = (stages: DeploymentStage[]) => {
-  const activeIndex = stages.findIndex((stage) => ['running', 'checking', 'waiting'].includes(stage.status))
-  if (activeIndex >= 0) {
-    return activeIndex
-  }
-  const pendingIndex = stages.findIndex((stage) => stage.status === 'pending')
-  if (pendingIndex >= 0) {
-    return pendingIndex
-  }
-  return Math.max(stages.length - 1, 0)
+  return summarizeDeploymentPipeline(stages).activeIndex
 }
 
 const formatDuration = (durationMs?: number) => {

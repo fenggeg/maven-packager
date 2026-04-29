@@ -7,7 +7,8 @@ import {
     PlayCircleOutlined
 } from '@ant-design/icons'
 import {Button, Card, Input, List, Modal, Radio, Select, Space, Tag, Tooltip, Typography} from 'antd'
-import {useEffect, useRef, useState} from 'react'
+import {useEffect, useMemo, useRef, useState} from 'react'
+import {LogConsole} from '../common/LogConsole'
 import {useAppStore} from '../../store/useAppStore'
 import {useDeploymentLogStore} from '../../store/useDeploymentLogStore'
 import {useNavigationStore} from '../../store/navigationStore'
@@ -18,6 +19,7 @@ const { Text } = Typography
 
 type LogSource = 'build' | 'deployment'
 type LogFilter = 'all' | 'error' | 'warn' | 'success'
+const EMPTY_DEPLOYMENT_LOGS: string[] = []
 
 const statusText: Record<BuildStatus, string> = {
   IDLE: '未开始',
@@ -108,7 +110,11 @@ export function BuildLogPanel() {
 
   // Deployment logs
   const currentDeploymentTask = useWorkflowStore((state) => state.currentDeploymentTask)
-  const deploymentLogsByTaskId = useDeploymentLogStore((state) => state.logsByTaskId)
+  const deploymentTaskId = currentDeploymentTask?.id
+  const deploymentLogs = useDeploymentLogStore(
+    (state) => state.logsByTaskId[deploymentTaskId ?? ''] ?? EMPTY_DEPLOYMENT_LOGS,
+  )
+  const clearDeploymentLogs = useDeploymentLogStore((state) => state.clearLogs)
 
   const panelRef = useRef<HTMLDivElement>(null)
   const modalPanelRef = useRef<HTMLDivElement>(null)
@@ -123,9 +129,6 @@ export function BuildLogPanel() {
 
   // Alias for local readability
   const setActiveSourceLocal = (source: LogSource) => setActiveSource(source)
-
-  const deploymentTaskId = currentDeploymentTask?.id
-  const deploymentLogs = deploymentLogsByTaskId[deploymentTaskId ?? ''] ?? []
 
   const lastLaunchRef = useRef<{
     buildStartedAt?: number
@@ -172,47 +175,23 @@ export function BuildLogPanel() {
   }, [autoScroll, currentLogCount])
 
   // Filter by keyword
-  const visibleBuildLogs = logs.filter((event) => {
+  const keywordValue = keyword.trim().toLowerCase()
+  const visibleBuildLogs = useMemo(() => logs.filter((event) => {
     if (logFilter !== 'all' && classifyBuildLog(event) !== logFilter) return false
-    if (keyword.trim() && !event.line.toLowerCase().includes(keyword.trim().toLowerCase())) return false
+    if (keywordValue && !event.line.toLowerCase().includes(keywordValue)) return false
     return true
-  })
+  }), [keywordValue, logFilter, logs])
 
-  const visibleDeploymentLogs = deploymentLogs.filter((line) => {
+  const visibleDeploymentLogs = useMemo(() => deploymentLogs.filter((line) => {
     if (logFilter !== 'all' && classifyLine(line) !== logFilter) return false
-    if (keyword.trim() && !line.toLowerCase().includes(keyword.trim().toLowerCase())) return false
+    if (keywordValue && !line.toLowerCase().includes(keywordValue)) return false
     return true
-  })
+  }), [deploymentLogs, keywordValue, logFilter])
 
-  const renderContent = () => {
-    if (activeSource === 'build') {
-      return visibleBuildLogs.length === 0 ? (
-        <div className="log-empty">
-          <Text>准备开始构建</Text>
-          <Text type="secondary">请选择模块并点击"开始打包"。</Text>
-        </div>
-      ) : (
-        visibleBuildLogs.map((event, index) => (
-          <pre className={`log-line ${classifyBuildLog(event)}`} key={`${event.buildId}-${index}`}>
-            {event.line}
-          </pre>
-        ))
-      )
-    }
-
-    return visibleDeploymentLogs.length === 0 ? (
-      <div className="log-empty">
-        <Text>暂无部署日志</Text>
-        <Text type="secondary">执行部署后日志将在此实时展示。</Text>
-      </div>
-    ) : (
-      visibleDeploymentLogs.map((line, index) => (
-        <pre className={`log-line ${classifyLine(line)}`} key={`dl-${index}`}>
-          {line}
-        </pre>
-      ))
-    )
-  }
+  const visibleBuildLogLines = useMemo(
+    () => visibleBuildLogs.map((event) => event.line),
+    [visibleBuildLogs],
+  )
 
   const copyLogs = () => {
     let text = ''
@@ -241,8 +220,9 @@ export function BuildLogPanel() {
   const clearLogs = () => {
     if (activeSource === 'build') {
       clearBuildLogs()
+    } else if (deploymentTaskId) {
+      clearDeploymentLogs(deploymentTaskId)
     }
-    // Deployment logs are managed by deployment flows
   }
 
   // Build status tag for header
@@ -309,6 +289,11 @@ export function BuildLogPanel() {
             {activeSource === 'build' && (
               <Tooltip title="清空日志">
                 <Button size="small" type="text" icon={<DeleteOutlined />} onClick={clearLogs} />
+              </Tooltip>
+            )}
+            {activeSource === 'deployment' && (
+              <Tooltip title="清空当前部署日志">
+                <Button size="small" type="text" icon={<DeleteOutlined />} disabled={!deploymentTaskId} onClick={clearLogs} />
               </Tooltip>
             )}
             <Tooltip title="复制日志">
@@ -380,9 +365,25 @@ export function BuildLogPanel() {
             onChange={(event) => setKeyword(event.target.value)}
           />
         </Space>
-        <div className="log-panel" ref={panelRef}>
-          {renderContent()}
-        </div>
+        {activeSource === 'build' ? (
+          <LogConsole
+            ref={panelRef}
+            lines={visibleBuildLogLines}
+            classifyLine={classifyLine}
+            emptyTitle="准备开始构建"
+            emptyDescription="请选择模块并点击开始打包。"
+            keyPrefix="build-log"
+          />
+        ) : (
+          <LogConsole
+            ref={panelRef}
+            lines={visibleDeploymentLogs}
+            classifyLine={classifyLine}
+            emptyTitle="暂无部署日志"
+            emptyDescription="执行部署后日志将在此实时展示。"
+            keyPrefix="deployment-log"
+          />
+        )}
         <Modal
           title={`日志输出 · ${activeSource === 'build' ? '构建' : '部署'}`}
           open={expanded}
@@ -390,9 +391,27 @@ export function BuildLogPanel() {
           width="88vw"
           onCancel={() => setExpanded(false)}
         >
-          <div className="log-panel log-panel-large" ref={modalPanelRef}>
-            {renderContent()}
-          </div>
+          {activeSource === 'build' ? (
+            <LogConsole
+              ref={modalPanelRef}
+              className="log-panel log-panel-large"
+              lines={visibleBuildLogLines}
+              classifyLine={classifyLine}
+              emptyTitle="准备开始构建"
+              emptyDescription="请选择模块并点击开始打包。"
+              keyPrefix="build-log-modal"
+            />
+          ) : (
+            <LogConsole
+              ref={modalPanelRef}
+              className="log-panel log-panel-large"
+              lines={visibleDeploymentLogs}
+              classifyLine={classifyLine}
+              emptyTitle="暂无部署日志"
+              emptyDescription="执行部署后日志将在此实时展示。"
+              keyPrefix="deployment-log-modal"
+            />
+          )}
         </Modal>
       </Card>
 

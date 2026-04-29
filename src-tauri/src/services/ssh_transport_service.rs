@@ -170,7 +170,12 @@ impl SshConnection {
             .command_session
             .as_ref()
             .ok_or_else(|| to_user_error("当前 SSH 连接不支持带输入的提权命令。"))?;
-        execute_via_ssh2(session, command, stdin.unwrap_or_default(), success_exit_codes)
+        execute_via_ssh2(
+            session,
+            command,
+            stdin.unwrap_or_default(),
+            success_exit_codes,
+        )
     }
 
     pub fn execute_privileged_with_cancel<C>(
@@ -334,7 +339,7 @@ where
         .create(remote)
         .map_err(|error| to_user_error(format!("SFTP 创建远程文件失败：{}", error)))?;
 
-    let mut buffer = [0u8; 65536];
+    let mut buffer = [0u8; 256 * 1024];
     let mut uploaded: u64 = 0;
     let start_time = Instant::now();
     let mut last_progress_time = Instant::now();
@@ -411,8 +416,10 @@ where
         .map_err(|error| to_user_error(format!("读取本地产物失败：{}", error)))?;
 
     let encoded = BASE64.encode(&buffer);
-    let chunk_size = 65536;
+    let chunk_size = 512 * 1024;
     let temp_b64 = format!("{}/.upload.b64", remote_dir);
+    let quoted_temp_b64 = shell_quote(&temp_b64);
+    let quoted_remote_path = shell_quote(remote_path);
     let start_time = Instant::now();
     let mut last_progress_time = Instant::now();
     let mut last_uploaded: u64 = 0;
@@ -421,11 +428,12 @@ where
         let mut clear_channel = session
             .open_exec()
             .map_err(|error| to_user_error(format!("无法打开 SSH 命令通道：{}", error)))?;
-        let clear_cmd = format!("> {}", temp_b64);
+        let clear_cmd = format!("> {}", quoted_temp_b64);
         clear_channel.exec_command(&clear_cmd).ok();
         let _ = clear_channel.get_output();
 
         let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(chunk_size).collect();
+        let encoded_len = encoded.len().max(1) as f64;
 
         for (i, chunk) in chunks.into_iter().enumerate() {
             if is_cancelled() {
@@ -436,7 +444,7 @@ where
             let heredoc_marker = format!("__CHUNK_{}__", i);
             let append_cmd = format!(
                 "cat >> {} << '{}'\n{}\n{}",
-                temp_b64, heredoc_marker, chunk_str, heredoc_marker
+                quoted_temp_b64, heredoc_marker, chunk_str, heredoc_marker
             );
 
             let mut chunk_channel = session
@@ -447,7 +455,10 @@ where
                 .map_err(|error| to_user_error(format!("上传文件块失败：{}", error)))?;
             let _ = chunk_channel.get_output();
 
-            let uploaded = ((i + 1) as u64 * chunk_size as u64).min(file_size);
+            let encoded_uploaded = ((i + 1) as u64 * chunk_size as u64).min(encoded.len() as u64);
+            let uploaded = ((encoded_uploaded as f64 / encoded_len) * file_size as f64)
+                .round()
+                .min(file_size as f64) as u64;
             let now = Instant::now();
             let speed = if now.duration_since(last_progress_time) >= Duration::from_millis(200) {
                 let elapsed_secs = now.duration_since(last_progress_time).as_secs_f64();
@@ -477,7 +488,7 @@ where
             .map_err(|error| to_user_error(format!("无法打开 SSH 命令通道：{}", error)))?;
         let decode_cmd = format!(
             "base64 -d {} > {} && rm -f {}",
-            temp_b64, remote_path, temp_b64
+            quoted_temp_b64, quoted_remote_path, quoted_temp_b64
         );
         decode_channel
             .exec_command(&decode_cmd)
@@ -487,7 +498,13 @@ where
         let heredoc_marker = "__UPLOAD_EOF__";
         let write_cmd = format!(
             "cat > {} << '{}'\n{}\n{} && base64 -d {} > {} && rm -f {}",
-            temp_b64, heredoc_marker, encoded, heredoc_marker, temp_b64, remote_path, temp_b64
+            quoted_temp_b64,
+            heredoc_marker,
+            encoded,
+            heredoc_marker,
+            quoted_temp_b64,
+            quoted_remote_path,
+            quoted_temp_b64
         );
         let mut upload_channel = session
             .open_exec()
@@ -556,10 +573,17 @@ fn wrap_privileged_command(
     command: &str,
 ) -> AppResult<(String, Option<String>)> {
     let command_with_shell = format!("{} {}", privilege.shell.trim(), shell_quote(command));
-    let stdin = privilege.password.as_ref().map(|password| format!("{}\n", password));
+    let stdin = privilege
+        .password
+        .as_ref()
+        .map(|password| format!("{}\n", password));
     let wrapped = match privilege.mode.as_str() {
         "sudo" | "sudo_i" => {
-            let identity_arg = if privilege.mode == "sudo_i" { "-i " } else { "" };
+            let identity_arg = if privilege.mode == "sudo_i" {
+                "-i "
+            } else {
+                ""
+            };
             let password_arg = if stdin.is_some() { "-S -p ''" } else { "-n" };
             format!(
                 "sudo {password_arg} {identity_arg}-u {user} {command}",
@@ -689,7 +713,11 @@ pub fn test_server_connection(profile: &ExecutionServerProfile) -> AppResult<Str
         profile.host,
         profile.port,
         profile.auth_type,
-        if privilege_enabled { "，提权可用" } else { "" }
+        if privilege_enabled {
+            "，提权可用"
+        } else {
+            ""
+        }
     ))
 }
 

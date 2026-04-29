@@ -73,7 +73,9 @@ pub fn run_startup_probe(
         if let Some(log_path) = &detected_log_path {
             // Incremental read: only emit lines that haven't been sent yet
             let total_cmd = format!("wc -l {} 2>/dev/null || echo 0", shell_quote(log_path));
-            if let Ok(wc_result) = conn.execute_privileged_with_cancel(&total_cmd, || is_cancelled()) {
+            if let Ok(wc_result) =
+                conn.execute_privileged_with_cancel(&total_cmd, || is_cancelled())
+            {
                 if let Ok(total_lines) = wc_result
                     .output
                     .trim()
@@ -89,7 +91,8 @@ pub fn run_startup_probe(
                             skip + 1,
                             shell_quote(log_path)
                         );
-                        if let Ok(result) = conn.execute_privileged_with_cancel(&tail_cmd, || is_cancelled())
+                        if let Ok(result) =
+                            conn.execute_privileged_with_cancel(&tail_cmd, || is_cancelled())
                         {
                             for line in result.output.lines() {
                                 on_log(line);
@@ -721,7 +724,8 @@ fn latest_log_from_globs(conn: &mut SshConnection, context: &ProbeContext) -> Op
 
 fn remote_file_exists(conn: &mut SshConnection, path: &str) -> bool {
     let command = format!("test -f {}", shell_quote(path));
-    conn.execute_privileged_with_cancel(&command, || false).is_ok()
+    conn.execute_privileged_with_cancel(&command, || false)
+        .is_ok()
 }
 
 fn evaluate_success(
