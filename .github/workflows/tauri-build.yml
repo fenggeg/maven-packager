@@ -114,12 +114,25 @@ jobs:
         run: npm ci
 
       - name: Build Tauri App (NSIS x64 Setup Only)
-        shell: powershell
+        uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CI: true
-        run: npm run tauri:build -- --ci --bundles nsis
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'windows-auto-build' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('PackFlow Workbench {0}', github.ref_name) || 'PackFlow Workbench Auto Build' }}
+          releaseBody: ${{ steps.release_notes.outputs.body }}
+          generateReleaseNotes: false
+          releaseDraft: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          args: --ci --bundles nsis
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          updaterJsonPreferNsis: true
+          uploadPlainBinary: false
+          retryAttempts: 2
 
       - name: Prepare x64 Setup EXE
         shell: powershell
@@ -165,8 +178,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Temporarily disabled to keep CI fast and publish only x64 setup EXE:
+      # Temporarily disabled to keep CI fast while preserving updater latest.json:
       # - MSI build
       # - Portable EXE packaging
-      # - Updater latest.json upload and verification
-      # - Updater signature verification
+      # - Extra updater verification steps
