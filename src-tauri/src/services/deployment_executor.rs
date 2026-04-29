@@ -329,6 +329,7 @@ fn execute_deployment(
     let mut task = DeploymentTask {
         id: task_id.to_string(),
         build_task_id: payload.build_task_id,
+        project_root: profile.project_root.clone(),
         deployment_profile_id: profile.id.clone(),
         deployment_profile_name: Some(profile.name.clone()),
         server_id: server.id.clone(),
@@ -1520,6 +1521,7 @@ fn create_failed_start_task(
     DeploymentTask {
         id: task_id.to_string(),
         build_task_id: payload.build_task_id.clone(),
+        project_root: String::new(),
         deployment_profile_id: payload.deployment_profile_id.clone(),
         deployment_profile_name: None,
         server_id: payload.server_id.clone(),

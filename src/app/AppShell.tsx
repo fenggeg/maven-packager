@@ -1,6 +1,7 @@
 import {BranchesOutlined, FolderOutlined} from '@ant-design/icons'
-import {Space, Tag, Typography} from 'antd'
-import {useMemo} from 'react'
+import {Modal, Space, Tag, Typography} from 'antd'
+import {useMemo, useState} from 'react'
+import {ProjectSelector} from '../components/ProjectSelector/ProjectSelector'
 import {UpdateChecker} from '../components/UpdateChecker/UpdateChecker'
 import {useAppStore} from '../store/useAppStore'
 import {useNavigationStore} from '../store/navigationStore'
@@ -10,7 +11,7 @@ import {InspectorDrawer} from './InspectorDrawer'
 import {MainWorkspace} from './MainWorkspace'
 import {SidebarPanel} from './SidebarPanel'
 
-const {Title, Text} = Typography
+const {Text} = Typography
 
 const noSidebarPages = new Set(['deployment', 'artifacts', 'services'])
 
@@ -28,6 +29,7 @@ export function AppShell() {
   const activePage = useNavigationStore((state) => state.activePage)
   const project = useAppStore((state) => state.project)
   const gitStatus = useAppStore((state) => state.gitStatus)
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false)
 
   const sidebarHidden = noSidebarPages.has(activePage)
   const bodyStyle = useMemo(
@@ -39,9 +41,21 @@ export function AppShell() {
     <div className="v3-shell">
       <header className="v3-header">
         <div className="app-header-copy">
-          <Title level={3} className="app-title">Maven Packager</Title>
           <Space size={8} wrap className="app-context">
-            <Tag icon={<FolderOutlined />} color={project ? 'blue' : 'default'}>
+            <Tag
+              icon={<FolderOutlined />}
+              color={project ? 'blue' : 'default'}
+              className="quick-project-switch"
+              role="button"
+              tabIndex={0}
+              onClick={() => setProjectSwitcherOpen(true)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  setProjectSwitcherOpen(true)
+                }
+              }}
+            >
               {project?.artifactId ?? '尚未选择项目'}
             </Tag>
             <Tag
@@ -50,7 +64,20 @@ export function AppShell() {
             >
               {gitStatus?.branch ?? '未识别分支'}
             </Tag>
-            <Text type="secondary" className="app-path" title={project?.rootPath}>
+            <Text
+              type="secondary"
+              className="app-path quick-project-switch"
+              title={project?.rootPath}
+              role="button"
+              tabIndex={0}
+              onClick={() => setProjectSwitcherOpen(true)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  setProjectSwitcherOpen(true)
+                }
+              }}
+            >
               {project?.rootPath ?? '选择项目后自动识别模块、Git 与构建环境'}
             </Text>
           </Space>
@@ -64,6 +91,15 @@ export function AppShell() {
         <InspectorDrawer />
       </div>
       <BottomActionBar />
+      <Modal
+        title="项目切换"
+        open={projectSwitcherOpen}
+        footer={null}
+        width={640}
+        onCancel={() => setProjectSwitcherOpen(false)}
+      >
+        <ProjectSelector framed={false} onProjectSelected={() => setProjectSwitcherOpen(false)} />
+      </Modal>
     </div>
   )
 }

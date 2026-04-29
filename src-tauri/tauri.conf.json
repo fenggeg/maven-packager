@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "maven-packager-desktop",
-  "version": "2.0.0",
+  "productName": "打包部署工作台",
+  "version": "2.0.1",
   "identifier": "com.local.mavenpackager",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Maven Packager",
+        "title": "打包部署工作台",
         "width": 1360,
         "height": 860,
         "resizable": true,

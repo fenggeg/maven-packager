@@ -1,15 +1,16 @@
 import {create} from 'zustand'
 import {api} from '../services/tauri-api'
+import {useAppStore} from './useAppStore'
 import {useDeploymentLogStore} from './useDeploymentLogStore'
 import type {
-  DeploymentProfile,
-  DeploymentStage,
-  DeploymentTask,
-  DeployStepType,
-  ModuleDependencyGraph,
-  ProbeStatusEvent,
-  SaveServerProfilePayload,
-  ServerProfile,
+    DeploymentProfile,
+    DeploymentStage,
+    DeploymentTask,
+    DeployStepType,
+    ModuleDependencyGraph,
+    ProbeStatusEvent,
+    SaveServerProfilePayload,
+    ServerProfile,
 } from '../types/domain'
 
 interface WorkflowState {
@@ -205,6 +206,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         currentDeploymentTask: {
           id: taskId,
           deploymentProfileId: profileId,
+          projectRoot: profile?.projectRoot ?? useAppStore.getState().project?.rootPath ?? '',
           serverId,
           moduleId: '',
           artifactPath,

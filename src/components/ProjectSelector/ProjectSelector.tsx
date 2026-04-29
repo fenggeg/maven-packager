@@ -10,7 +10,12 @@ const projectNameFromPath = (path: string) => {
   return parts.at(-1) ?? path
 }
 
-export function ProjectSelector() {
+interface ProjectSelectorProps {
+  framed?: boolean
+  onProjectSelected?: () => void
+}
+
+export function ProjectSelector({framed = true, onProjectSelected}: ProjectSelectorProps) {
   const project = useAppStore((state) => state.project)
   const savedProjectPaths = useAppStore((state) => state.savedProjectPaths)
   const error = useAppStore((state) => state.error)
@@ -22,8 +27,7 @@ export function ProjectSelector() {
 
   const currentPath = project?.rootPath ?? ''
 
-  return (
-    <Card title="项目选择" className="panel-card" size="small">
+  const content = (
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Button
           type="primary"
@@ -41,7 +45,7 @@ export function ProjectSelector() {
           onChange={(event) => setManualPath(event.target.value)}
           onSearch={(value) => {
             if (value.trim()) {
-              void parseProjectPath(value.trim())
+              void parseProjectPath(value.trim()).then(onProjectSelected)
               setManualPath('')
             }
           }}
@@ -86,7 +90,7 @@ export function ProjectSelector() {
                     ]}
                     onClick={() => {
                       if (!active) {
-                        void parseProjectPath(path)
+                        void parseProjectPath(path).then(onProjectSelected)
                       }
                     }}
                   >
@@ -105,6 +109,15 @@ export function ProjectSelector() {
           )}
         </div>
       </Space>
+  )
+
+  if (!framed) {
+    return content
+  }
+
+  return (
+    <Card title="项目选择" className="panel-card" size="small">
+      {content}
     </Card>
   )
 }

@@ -79,7 +79,13 @@ pub struct BackupConfig {
 pub struct DeploymentProfile {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub project_root: String,
     pub module_id: String,
+    #[serde(default)]
+    pub module_path: String,
+    #[serde(default)]
+    pub module_artifact_id: String,
     pub local_artifact_pattern: String,
     #[serde(default)]
     pub remote_artifact_name: Option<String>,
@@ -244,6 +250,8 @@ pub struct RollbackResult {
 pub struct DeploymentTask {
     pub id: String,
     pub build_task_id: Option<String>,
+    #[serde(default)]
+    pub project_root: String,
     pub deployment_profile_id: String,
     pub deployment_profile_name: Option<String>,
     pub server_id: String,

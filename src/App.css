@@ -322,6 +322,14 @@
   min-width: 0;
 }
 
+.quick-project-switch {
+  cursor: pointer;
+}
+
+.quick-project-switch:hover {
+  color: #16a34a;
+}
+
 .app-path {
   display: inline-block;
   max-width: min(46vw, 720px);
@@ -729,7 +737,7 @@
 
 .env-profile-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto 34px;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 34px;
   gap: 8px;
   min-width: 0;
 }
@@ -1068,6 +1076,12 @@
   gap: 16px;
   min-height: 560px;
   min-width: 0;
+}
+
+.deployment-form-modal {
+  max-height: min(72vh, 760px);
+  padding-right: 4px;
+  overflow: auto;
 }
 
 .deployment-step-list {

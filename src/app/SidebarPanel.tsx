@@ -4,7 +4,7 @@ import {GitStatusCard} from '../components/GitStatus/GitStatusCard'
 import {ModuleTreePanel} from '../components/ModuleTree/ModuleTreePanel'
 import {ProjectSelector} from '../components/ProjectSelector/ProjectSelector'
 import {useAppStore} from '../store/useAppStore'
-import {type AppPage} from '../store/navigationStore'
+import {type AppPage, useNavigationStore} from '../store/navigationStore'
 import {useWorkflowStore} from '../store/useWorkflowStore'
 
 const {Text} = Typography
@@ -17,13 +17,16 @@ export function SidebarPanel({activePage}: SidebarPanelProps) {
   const history = useAppStore((state) => state.history)
   const environment = useAppStore((state) => state.environment)
   const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
+  const buildSidebarTab = useNavigationStore((state) => state.buildSidebarTab)
+  const setBuildSidebarTab = useNavigationStore((state) => state.setBuildSidebarTab)
 
   if (activePage === 'build') {
     return (
       <aside className="sidebar-panel build-sidebar">
         <Tabs
           className="build-sidebar-tabs"
-          defaultActiveKey="modules"
+          activeKey={buildSidebarTab}
+          onChange={(key) => setBuildSidebarTab(key as typeof buildSidebarTab)}
           items={[
             {
               key: 'project',

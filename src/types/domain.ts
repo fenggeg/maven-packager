@@ -456,7 +456,10 @@ export interface BackupConfig {
 export interface DeploymentProfile {
   id: string
   name: string
+  projectRoot: string
   moduleId: string
+  modulePath: string
+  moduleArtifactId: string
   localArtifactPattern: string
   remoteArtifactName?: string
   remoteDeployPath: string
@@ -506,6 +509,7 @@ export interface RollbackResult {
 export interface DeploymentTask {
   id: string
   buildTaskId?: string
+  projectRoot: string
   deploymentProfileId: string
   deploymentProfileName?: string
   serverId: string

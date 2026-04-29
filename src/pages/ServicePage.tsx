@@ -1,7 +1,7 @@
 import {CloudServerOutlined, DatabaseOutlined, RocketOutlined, SearchOutlined} from '@ant-design/icons'
 import {Button, Card, Descriptions, Empty, Input, Modal, Space, Table, Tag, Typography} from 'antd'
 import {useMemo, useState} from 'react'
-import {flattenModules, moduleLabel} from '../services/deploymentTopologyService'
+import {belongsToProject, flattenModules, profileModuleLabel} from '../services/deploymentTopologyService'
 import {useAppStore} from '../store/useAppStore'
 import {useDeploymentLogStore} from '../store/useDeploymentLogStore'
 import {useNavigationStore} from '../store/navigationStore'
@@ -96,6 +96,10 @@ export function ServicePage() {
   const deploymentTasks = useWorkflowStore((state) => state.deploymentTasks)
   const deploymentLogsByTaskId = useDeploymentLogStore((state) => state.logsByTaskId)
   const navigateToDeployment = useNavigationStore((state) => state.navigateToDeployment)
+  const currentProjectDeploymentProfiles = useMemo(
+    () => deploymentProfiles.filter((profile) => belongsToProject(profile, project?.rootPath)),
+    [deploymentProfiles, project?.rootPath],
+  )
 
   const [openTask, setOpenTask] = useState<DeploymentTask>()
   const [logKeyword, setLogKeyword] = useState('')
@@ -150,19 +154,19 @@ export function ServicePage() {
       </div>
 
       <Space size={12} wrap style={{marginBottom: 16}}>
-        <Tag icon={<DatabaseOutlined />} color="blue">服务 {deploymentProfiles.length}</Tag>
+        <Tag icon={<DatabaseOutlined />} color="blue">服务 {currentProjectDeploymentProfiles.length}</Tag>
         <Tag icon={<CloudServerOutlined />} color="purple">服务器 {serverProfiles.length}</Tag>
         <Tag color="processing">运行中 {runningCount}</Tag>
         <Tag color="green">成功 {successCount}</Tag>
         <Tag color="red">失败 {failedCount}</Tag>
       </Space>
 
-      {deploymentProfiles.length === 0 ? (
+      {currentProjectDeploymentProfiles.length === 0 ? (
         <Empty description="暂无服务配置，请先在部署中心添加服务映射" image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
         <Space direction="vertical" size={16} style={{width: '100%'}}>
-          {deploymentProfiles.map((profile) => {
-            const moduleName = moduleLabel(modules, profile.moduleId)
+          {currentProjectDeploymentProfiles.map((profile) => {
+            const moduleName = profileModuleLabel(modules, profile)
             return (
               <Card
                 key={profile.id}

@@ -1,5 +1,13 @@
-import {Alert, Button, Card, Collapse, Input, Popconfirm, Segmented, Select, Space, Tag, Typography} from 'antd'
-import {DeleteOutlined, FileSearchOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined,} from '@ant-design/icons'
+import {Alert, Button, Card, Collapse, Input, Modal, Popconfirm, Segmented, Select, Space, Tag, Typography} from 'antd'
+import {
+    DeleteOutlined,
+    EditOutlined,
+    FileSearchOutlined,
+    FolderOpenOutlined,
+    PlusOutlined,
+    ReloadOutlined,
+    SettingOutlined,
+} from '@ant-design/icons'
 import {useState} from 'react'
 import {buildEnvironmentCenterItems, sourceText, statusColor,} from '../../services/environmentCenterService'
 import {selectLocalDirectory, selectLocalFile} from '../../services/tauri-api'
@@ -19,6 +27,8 @@ export function EnvPanel() {
   const deleteEnvironmentProfile = useAppStore((state) => state.deleteEnvironmentProfile)
   const [profileName, setProfileName] = useState('')
   const [profileMode, setProfileMode] = useState<EnvProfileMode>('create')
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [pathModalOpen, setPathModalOpen] = useState(false)
 
   const javaValue = environment?.javaHome ?? ''
   const mavenValue = environment?.mavenHome ?? environment?.mavenPath ?? ''
@@ -62,6 +72,25 @@ export function EnvPanel() {
 
   const saveLocalRepo = (localRepoPath?: string) =>
     updateActiveProfile({ localRepoPath })
+
+  const openCreateProfileModal = () => {
+    setProfileMode('create')
+    setProfileName('')
+    setProfileModalOpen(true)
+  }
+
+  const openEditProfileModal = () => {
+    setProfileMode('edit')
+    setProfileName(activeProfile?.name ?? '')
+    setProfileModalOpen(true)
+  }
+
+  const submitProfileModal = () => {
+    void saveEnvironmentProfile(profileName || activeProfile?.name || '自定义环境')
+    setProfileName('')
+    setProfileMode('edit')
+    setProfileModalOpen(false)
+  }
 
   return (
     <Card
@@ -108,34 +137,21 @@ export function EnvPanel() {
             }}
           />
           <div className="env-profile-actions">
-            <Input
-              className="env-profile-name"
-              placeholder={profileMode === 'edit' ? '编辑当前方案名称' : '新增方案名称'}
-              value={profileName}
-              onChange={(event) => setProfileName(event.target.value)}
-              onPressEnter={() => {
-                void saveEnvironmentProfile(profileName || activeProfile?.name || '自定义环境')
-                setProfileName('')
-                setProfileMode('edit')
-              }}
-            />
             <Button
-              icon={<SaveOutlined />}
-              onClick={() => {
-                void saveEnvironmentProfile(profileName || activeProfile?.name || '自定义环境')
-                setProfileName('')
-                setProfileMode('edit')
-              }}
+              icon={<PlusOutlined />}
+              onClick={openCreateProfileModal}
             >
-              {profileMode === 'edit' ? '保存修改' : '新增方案'}
+              新增方案
             </Button>
             <Button
-              onClick={() => {
-                setProfileMode('create')
-                setProfileName('')
-              }}
+              icon={<EditOutlined />}
+              disabled={!activeProfile}
+              onClick={openEditProfileModal}
             >
-              新增
+              编辑方案
+            </Button>
+            <Button icon={<SettingOutlined />} onClick={() => setPathModalOpen(true)}>
+              手动覆盖
             </Button>
             <Popconfirm
               title="删除当前环境方案？"
@@ -216,121 +232,9 @@ export function EnvPanel() {
               key: 'manual',
               label: '手动覆盖路径',
               children: (
-                <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                  <div className="env-row">
-                    <Text className="env-row-label">JDK</Text>
-                    <Input.Group compact>
-                      <Input
-                        key={`java-${javaValue}`}
-                        className="env-path-input env-path-input-single-action"
-                        placeholder="选择或粘贴 JDK 目录"
-                        defaultValue={javaValue}
-                        onBlur={(event) =>
-                          void saveJavaHome(event.target.value.trim() || undefined)
-                        }
-                        onPressEnter={(event) => event.currentTarget.blur()}
-                      />
-                      <Button
-                        icon={<FolderOpenOutlined />}
-                        title="选择 JDK 目录"
-                        onClick={async () => {
-                          const selected = await selectLocalDirectory('选择 JDK 目录')
-                          if (selected) {
-                            await saveJavaHome(selected)
-                          }
-                        }}
-                      />
-                    </Input.Group>
-                  </div>
-
-                  <div className="env-row">
-                    <Text className="env-row-label">Maven</Text>
-                    <Input.Group compact>
-                      <Input
-                        key={`maven-${mavenValue}`}
-                        className="env-path-input env-path-input-double-action"
-                        placeholder="选择或粘贴 Maven 目录 / mvn.cmd"
-                        defaultValue={mavenValue}
-                        onBlur={(event) =>
-                          void saveMavenHome(event.target.value.trim() || undefined)
-                        }
-                        onPressEnter={(event) => event.currentTarget.blur()}
-                      />
-                      <Button
-                        icon={<FileSearchOutlined />}
-                        title="选择 mvn.cmd"
-                        onClick={async () => {
-                          const selected = await selectLocalFile('选择 mvn.cmd')
-                          if (selected) {
-                            await saveMavenHome(selected)
-                          }
-                        }}
-                      />
-                      <Button
-                        icon={<FolderOpenOutlined />}
-                        title="选择 Maven 目录"
-                        onClick={async () => {
-                          const selected = await selectLocalDirectory('选择 Maven 目录')
-                          if (selected) {
-                            await saveMavenHome(selected)
-                          }
-                        }}
-                      />
-                    </Input.Group>
-                  </div>
-
-                  <div className="env-row">
-                    <Text className="env-row-label">settings.xml</Text>
-                    <Input.Group compact>
-                      <Input
-                        key={`settings-${settingsValue}`}
-                        className="env-path-input env-path-input-single-action"
-                        placeholder="选择或粘贴 settings.xml"
-                        defaultValue={settingsValue}
-                        onBlur={(event) =>
-                          void saveSettingsXml(event.target.value.trim() || undefined)
-                        }
-                        onPressEnter={(event) => event.currentTarget.blur()}
-                      />
-                      <Button
-                        icon={<FileSearchOutlined />}
-                        title="选择 settings.xml"
-                        onClick={async () => {
-                          const selected = await selectLocalFile('选择 settings.xml')
-                          if (selected) {
-                            await saveSettingsXml(selected)
-                          }
-                        }}
-                      />
-                    </Input.Group>
-                  </div>
-
-                  <div className="env-row">
-                    <Text className="env-row-label">本地仓库</Text>
-                    <Input.Group compact>
-                      <Input
-                        key={`repo-${localRepoValue}`}
-                        className="env-path-input env-path-input-single-action"
-                        placeholder="选择或粘贴本地仓库目录"
-                        defaultValue={localRepoValue}
-                        onBlur={(event) =>
-                          void saveLocalRepo(event.target.value.trim() || undefined)
-                        }
-                        onPressEnter={(event) => event.currentTarget.blur()}
-                      />
-                      <Button
-                        icon={<FolderOpenOutlined />}
-                        title="选择本地仓库目录"
-                        onClick={async () => {
-                          const selected = await selectLocalDirectory('选择本地仓库目录')
-                          if (selected) {
-                            await saveLocalRepo(selected)
-                          }
-                        }}
-                      />
-                    </Input.Group>
-                  </div>
-                </Space>
+                <Button icon={<SettingOutlined />} onClick={() => setPathModalOpen(true)}>
+                  打开路径覆盖弹窗
+                </Button>
               ),
             },
           ]}
@@ -340,6 +244,146 @@ export function EnvPanel() {
           <Alert key={error} type="warning" showIcon message={error} />
         ))}
       </Space>
+      <Modal
+        title={profileMode === 'edit' ? '编辑环境方案' : '新增环境方案'}
+        open={profileModalOpen}
+        okText={profileMode === 'edit' ? '保存修改' : '新增方案'}
+        cancelText="取消"
+        onOk={submitProfileModal}
+        onCancel={() => setProfileModalOpen(false)}
+      >
+        <Input
+          autoFocus
+          placeholder={profileMode === 'edit' ? '编辑当前方案名称' : '新增方案名称'}
+          value={profileName}
+          onChange={(event) => setProfileName(event.target.value)}
+          onPressEnter={submitProfileModal}
+        />
+      </Modal>
+      <Modal
+        title="手动覆盖路径"
+        open={pathModalOpen}
+        okText="完成"
+        cancelText="关闭"
+        onOk={() => setPathModalOpen(false)}
+        onCancel={() => setPathModalOpen(false)}
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div className="env-row">
+            <Text className="env-row-label">JDK</Text>
+            <Input.Group compact>
+              <Input
+                key={`java-${javaValue}`}
+                className="env-path-input env-path-input-single-action"
+                placeholder="选择或粘贴 JDK 目录"
+                defaultValue={javaValue}
+                onBlur={(event) =>
+                  void saveJavaHome(event.target.value.trim() || undefined)
+                }
+                onPressEnter={(event) => event.currentTarget.blur()}
+              />
+              <Button
+                icon={<FolderOpenOutlined />}
+                title="选择 JDK 目录"
+                onClick={async () => {
+                  const selected = await selectLocalDirectory('选择 JDK 目录')
+                  if (selected) {
+                    await saveJavaHome(selected)
+                  }
+                }}
+              />
+            </Input.Group>
+          </div>
+
+          <div className="env-row">
+            <Text className="env-row-label">Maven</Text>
+            <Input.Group compact>
+              <Input
+                key={`maven-${mavenValue}`}
+                className="env-path-input env-path-input-double-action"
+                placeholder="选择或粘贴 Maven 目录 / mvn.cmd"
+                defaultValue={mavenValue}
+                onBlur={(event) =>
+                  void saveMavenHome(event.target.value.trim() || undefined)
+                }
+                onPressEnter={(event) => event.currentTarget.blur()}
+              />
+              <Button
+                icon={<FileSearchOutlined />}
+                title="选择 mvn.cmd"
+                onClick={async () => {
+                  const selected = await selectLocalFile('选择 mvn.cmd')
+                  if (selected) {
+                    await saveMavenHome(selected)
+                  }
+                }}
+              />
+              <Button
+                icon={<FolderOpenOutlined />}
+                title="选择 Maven 目录"
+                onClick={async () => {
+                  const selected = await selectLocalDirectory('选择 Maven 目录')
+                  if (selected) {
+                    await saveMavenHome(selected)
+                  }
+                }}
+              />
+            </Input.Group>
+          </div>
+
+          <div className="env-row">
+            <Text className="env-row-label">settings.xml</Text>
+            <Input.Group compact>
+              <Input
+                key={`settings-${settingsValue}`}
+                className="env-path-input env-path-input-single-action"
+                placeholder="选择或粘贴 settings.xml"
+                defaultValue={settingsValue}
+                onBlur={(event) =>
+                  void saveSettingsXml(event.target.value.trim() || undefined)
+                }
+                onPressEnter={(event) => event.currentTarget.blur()}
+              />
+              <Button
+                icon={<FileSearchOutlined />}
+                title="选择 settings.xml"
+                onClick={async () => {
+                  const selected = await selectLocalFile('选择 settings.xml')
+                  if (selected) {
+                    await saveSettingsXml(selected)
+                  }
+                }}
+              />
+            </Input.Group>
+          </div>
+
+          <div className="env-row">
+            <Text className="env-row-label">本地仓库</Text>
+            <Input.Group compact>
+              <Input
+                key={`repo-${localRepoValue}`}
+                className="env-path-input env-path-input-single-action"
+                placeholder="选择或粘贴本地仓库目录"
+                defaultValue={localRepoValue}
+                onBlur={(event) =>
+                  void saveLocalRepo(event.target.value.trim() || undefined)
+                }
+                onPressEnter={(event) => event.currentTarget.blur()}
+              />
+              <Button
+                icon={<FolderOpenOutlined />}
+                title="选择本地仓库目录"
+                onClick={async () => {
+                  const selected = await selectLocalDirectory('选择本地仓库目录')
+                  if (selected) {
+                    await saveLocalRepo(selected)
+                  }
+                }}
+              />
+            </Input.Group>
+          </div>
+        </Space>
+      </Modal>
     </Card>
   )
 }

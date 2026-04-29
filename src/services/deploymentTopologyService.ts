@@ -6,6 +6,9 @@ export const flattenModules = (modules: MavenModule[]): MavenModule[] =>
 export const normalizeModulePath = (value?: string) =>
   (value ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 
+export const normalizeProjectRoot = (value?: string) =>
+  normalizeModulePath(value).toLowerCase()
+
 export const globToRegex = (pattern: string) =>
   new RegExp(`^${pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -29,6 +32,28 @@ export const moduleLabel = (modules: MavenModule[], moduleId?: string) => {
   return module?.artifactId ?? '当前项目不存在该模块'
 }
 
+export const profileModuleLabel = (modules: MavenModule[], profile: DeploymentProfile) => {
+  if (!profile.moduleId && !profile.modulePath) {
+    return '全部项目'
+  }
+
+  const module = findProfileModule(modules, profile)
+  return module?.artifactId ?? (profile.moduleArtifactId || '当前项目不存在该模块')
+}
+
+export const findProfileModule = (modules: MavenModule[], profile: DeploymentProfile) => {
+  if (!profile.moduleId && !profile.modulePath) {
+    return undefined
+  }
+
+  return modules.find((item) => item.id === profile.moduleId)
+    ?? modules.find((item) =>
+      normalizeModulePath(item.relativePath) === normalizeModulePath(profile.modulePath))
+}
+
+export const belongsToProject = (profile: DeploymentProfile, projectRoot?: string) =>
+  normalizeProjectRoot(profile.projectRoot) === normalizeProjectRoot(projectRoot)
+
 export const artifactMatchesDeploymentProfile = (
   artifact: BuildArtifact,
   profile: DeploymentProfile,
@@ -43,7 +68,7 @@ export const artifactMatchesDeploymentProfile = (
     return true
   }
 
-  const module = modules.find((item) => item.id === profile.moduleId)
+  const module = findProfileModule(modules, profile)
   return module
     ? normalizeModulePath(artifact.modulePath) === normalizeModulePath(module.relativePath)
     : false

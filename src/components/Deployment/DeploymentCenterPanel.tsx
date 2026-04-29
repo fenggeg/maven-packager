@@ -1,60 +1,67 @@
 import {
-    Alert,
-    Button,
-    Card,
-    Checkbox,
-    Empty,
-    Input,
-    InputNumber,
-    List,
-    Modal,
-    Popconfirm,
-    Progress,
-    Select,
-    Space,
-    Steps,
-    Table,
-    Tabs,
-    Tag,
-    Tooltip,
-    Typography,
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  Empty,
+  Input,
+  InputNumber,
+  List,
+  Modal,
+  Popconfirm,
+  Progress,
+  Select,
+  Space,
+  Steps,
+  Table,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
 } from 'antd'
 import {
-    ArrowDownOutlined,
-    ArrowUpOutlined,
-    CloudServerOutlined,
-    DeleteOutlined,
-    DeploymentUnitOutlined,
-    EditOutlined,
-    HistoryOutlined,
-    InboxOutlined,
-    PlayCircleOutlined,
-    PlusOutlined,
-    SaveOutlined,
-    SearchOutlined,
-    StopOutlined,
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  CloudServerOutlined,
+  DeleteOutlined,
+  DeploymentUnitOutlined,
+  EditOutlined,
+  HistoryOutlined,
+  InboxOutlined,
+  PlayCircleOutlined,
+  PlusOutlined,
+  SaveOutlined,
+  SearchOutlined,
+  StopOutlined,
 } from '@ant-design/icons'
 import {memo, useEffect, useMemo, useState} from 'react'
 import {DeploymentHistoryTable} from './DeploymentHistoryTable'
-import {findDeployableArtifacts, flattenModules, moduleLabel,} from '../../services/deploymentTopologyService'
+import {
+  belongsToProject,
+  findDeployableArtifacts,
+  findProfileModule,
+  flattenModules,
+  normalizeProjectRoot,
+  profileModuleLabel,
+} from '../../services/deploymentTopologyService'
 import {api, selectLocalFile} from '../../services/tauri-api'
 import {useAppStore} from '../../store/useAppStore'
 import {useNavigationStore} from '../../store/navigationStore'
 import {useUploadProgressStore} from '../../store/useUploadProgressStore'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
 import type {
-    BackupConfig,
-    BuildArtifact,
-    DeployFailureStrategy,
-    DeploymentProfile,
-    DeploymentStage,
-    DeployStep,
-    DeployStepType,
-    LogNamingMode,
-    ProbeStatus,
-    SaveServerProfilePayload,
-    ServerProfile,
-    StartupProbeConfig,
+  BackupConfig,
+  BuildArtifact,
+  DeployFailureStrategy,
+  DeploymentProfile,
+  DeploymentStage,
+  DeployStep,
+  DeployStepType,
+  LogNamingMode,
+  ProbeStatus,
+  SaveServerProfilePayload,
+  ServerProfile,
+  StartupProbeConfig,
 } from '../../types/domain'
 
 const {Text} = Typography
@@ -120,7 +127,10 @@ const createDefaultBackupConfig = (): BackupConfig => ({
 const createDeploymentDraft = (): DeploymentProfile => ({
   id: crypto.randomUUID(),
   name: '',
+  projectRoot: '',
   moduleId: '',
+  modulePath: '',
+  moduleArtifactId: '',
   localArtifactPattern: '*.jar',
   remoteArtifactName: '',
   remoteDeployPath: '',
@@ -542,8 +552,10 @@ export function DeploymentCenterPanel() {
   const cancelDeployment = useWorkflowStore((state) => state.cancelDeployment)
   const [serverDraft, setServerDraft] = useState<SaveServerProfilePayload>(createServerDraft())
   const [serverFormMode, setServerFormMode] = useState<FormMode>('create')
+  const [serverEditorOpen, setServerEditorOpen] = useState(false)
   const [deploymentDraft, setDeploymentDraft] = useState<DeploymentProfile>(createDeploymentDraft())
   const [deploymentFormMode, setDeploymentFormMode] = useState<FormMode>('create')
+  const [deploymentEditorOpen, setDeploymentEditorOpen] = useState(false)
   const [selectedDeploymentProfileId, setSelectedDeploymentProfileId] = useState<string>()
   const [selectedServerId, setSelectedServerId] = useState<string>()
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string>()
@@ -558,6 +570,7 @@ export function DeploymentCenterPanel() {
   const [deploymentTemplates, setDeploymentTemplates] = useState<DeploymentTemplate[]>(loadDeploymentTemplates)
   const [templateDraft, setTemplateDraft] = useState<DeploymentTemplate>(createTemplateDraft())
   const [templateFormMode, setTemplateFormMode] = useState<FormMode>('create')
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false)
   const [selectedTemplateStepId, setSelectedTemplateStepId] = useState<string>()
   const [activeDeploymentTab, setActiveDeploymentTab] = useState('overview')
   const [serverListKeyword, setServerListKeyword] = useState('')
@@ -580,6 +593,18 @@ export function DeploymentCenterPanel() {
     () => new Map(modules.map((module) => [module.id, module])),
     [modules],
   )
+  const currentProjectDeploymentProfiles = useMemo(
+    () => deploymentProfiles.filter((profile) => belongsToProject(profile, projectRoot)),
+    [deploymentProfiles, projectRoot],
+  )
+  const currentProjectDeploymentTasks = useMemo(
+    () => deploymentTasks.filter((task) => normalizeProjectRoot(task.projectRoot) === normalizeProjectRoot(projectRoot)),
+    [deploymentTasks, projectRoot],
+  )
+  const visibleDeploymentTask = currentDeploymentTask
+    && normalizeProjectRoot(currentDeploymentTask.projectRoot) === normalizeProjectRoot(projectRoot)
+    ? currentDeploymentTask
+    : undefined
   const artifactPool = useMemo(
     () => {
       const currentProjectRoot = projectRoot ? normalizePath(projectRoot) : ''
@@ -593,18 +618,18 @@ export function DeploymentCenterPanel() {
     },
     [artifacts, history, projectRoot],
   )
-  const selectedProfile = deploymentProfiles.find((item) => item.id === selectedDeploymentProfileId)
-  const selectedProfileModule = selectedProfile?.moduleId ? moduleById.get(selectedProfile.moduleId) : undefined
-  const selectedProfileModuleMissing = Boolean(selectedProfile?.moduleId && !selectedProfileModule)
+  const selectedProfile = currentProjectDeploymentProfiles.find((item) => item.id === selectedDeploymentProfileId)
+  const selectedProfileModule = selectedProfile ? findProfileModule(modules, selectedProfile) : undefined
+  const selectedProfileModuleMissing = Boolean((selectedProfile?.moduleId || selectedProfile?.modulePath) && !selectedProfileModule)
   const selectedServer = serverProfiles.find((item) => item.id === selectedServerId)
-  const deploymentStages = currentDeploymentTask?.stages.length ? currentDeploymentTask.stages : defaultDeploymentStages
-  const deploymentRunning = Boolean(currentDeploymentTask && !deploymentTaskFinished(currentDeploymentTask.status))
+  const deploymentStages = visibleDeploymentTask?.stages.length ? visibleDeploymentTask.stages : defaultDeploymentStages
+  const deploymentRunning = Boolean(visibleDeploymentTask && !deploymentTaskFinished(visibleDeploymentTask.status))
   const buildRunning = buildStatus === 'RUNNING'
   const packageBuildGoals = buildOptions.goals.some((goal) => ['package', 'install', 'verify', 'deploy'].includes(goal))
     ? buildOptions.goals
     : Array.from(new Set([...(buildOptions.goals.length > 0 ? buildOptions.goals : ['clean']), 'package']))
   const artifactOptions = useMemo(() => {
-    if (!selectedProfile || (selectedProfile.moduleId && !selectedProfileModule)) {
+    if (!selectedProfile || selectedProfileModuleMissing) {
       return []
     }
 
@@ -613,7 +638,7 @@ export function DeploymentCenterPanel() {
         label: `${artifact.fileName}${artifact.modulePath ? ` · ${artifact.modulePath}` : ''}`,
         value: artifact.path,
       }))
-  }, [artifactPool, modules, selectedProfile, selectedProfileModule])
+  }, [artifactPool, modules, selectedProfile, selectedProfileModuleMissing])
   const filteredServerProfiles = useMemo(() => {
     const keyword = serverPickerKeyword.trim().toLowerCase()
     if (!keyword) {
@@ -633,7 +658,7 @@ export function DeploymentCenterPanel() {
     if (!pendingDeployAfterBuild || buildStatus !== 'SUCCESS' || buildRunning || deploymentRunning) {
       return
     }
-    const profile = deploymentProfiles.find((item) => item.id === pendingDeployAfterBuild.profileId)
+    const profile = currentProjectDeploymentProfiles.find((item) => item.id === pendingDeployAfterBuild.profileId)
     if (!profile) {
       return
     }
@@ -652,7 +677,7 @@ export function DeploymentCenterPanel() {
     buildRunning,
     buildStatus,
     deploymentRunning,
-    deploymentProfiles,
+    currentProjectDeploymentProfiles,
     modules,
     pendingDeployAfterBuild,
     startDeployment,
@@ -665,10 +690,10 @@ export function DeploymentCenterPanel() {
     buildOptions.skipTests ? '跳过测试' : '执行测试',
   ].join('；')
   const recentArtifacts = artifactPool.slice(0, 5)
-  const recentDeployments = deploymentTasks.slice(0, 5)
-  const deploymentSuccessCount = deploymentTasks.filter((task) => task.status === 'success').length
-  const runningDeploymentCount = deploymentTasks.filter((task) => !deploymentTaskFinished(task.status)).length
-  const topologyRows = deploymentProfiles.slice(0, 6)
+  const recentDeployments = currentProjectDeploymentTasks.slice(0, 5)
+  const deploymentSuccessCount = currentProjectDeploymentTasks.filter((task) => task.status === 'success').length
+  const runningDeploymentCount = currentProjectDeploymentTasks.filter((task) => !deploymentTaskFinished(task.status)).length
+  const topologyRows = currentProjectDeploymentProfiles.slice(0, 6)
   const deploymentSteps = useMemo(
     () => [...(deploymentDraft.deploymentSteps ?? [])].sort((left, right) => left.order - right.order),
     [deploymentDraft.deploymentSteps],
@@ -681,7 +706,7 @@ export function DeploymentCenterPanel() {
   const selectedTemplateStep = templateSteps.find((step) => step.id === selectedTemplateStepId) ?? templateSteps[0]
   const enabledStepCount = (deploymentDraft.deploymentSteps ?? []).filter((step) => step.enabled).length
   const serverStatus = (serverId: string) => {
-    const latestTask = deploymentTasks.find((task) => task.serverId === serverId)
+    const latestTask = currentProjectDeploymentTasks.find((task) => task.serverId === serverId)
     if (!latestTask) {
       return {label: '空闲', color: 'default'}
     }
@@ -695,6 +720,15 @@ export function DeploymentCenterPanel() {
       return {label: '已停止', color: 'orange'}
     }
     return {label: '部署中', color: 'processing'}
+  }
+
+  const moduleSnapshot = (moduleId?: string) => {
+    const module = moduleId ? moduleById.get(moduleId) : undefined
+    return {
+      moduleId: module?.id ?? '',
+      modulePath: module?.relativePath ?? '',
+      moduleArtifactId: module?.artifactId ?? '',
+    }
   }
 
   const updateDeploymentSteps = (steps: DeployStep[], nextSelectedStepId?: string) => {
@@ -819,12 +853,14 @@ export function DeploymentCenterPanel() {
     setTemplateDraft(createTemplateDraft())
     setTemplateFormMode('create')
     setSelectedTemplateStepId(undefined)
+    setTemplateEditorOpen(false)
   }
 
   const editDeploymentTemplate = (template: DeploymentTemplate) => {
     setTemplateDraft({...template, steps: cloneDeploySteps(template.steps), builtin: false})
     setTemplateFormMode(template.builtin ? 'create' : 'edit')
     setSelectedTemplateStepId(template.steps[0]?.id)
+    setTemplateEditorOpen(true)
   }
 
   const deleteDeploymentTemplate = (templateId: string) => {
@@ -846,18 +882,23 @@ export function DeploymentCenterPanel() {
       privateKeyPath: profile.privateKeyPath,
       group: profile.group,
     })
+    setServerEditorOpen(true)
   }
 
   const newServer = () => {
     setServerFormMode('create')
     setServerDraft(createServerDraft())
     setTestResult(undefined)
+    setServerEditorOpen(true)
   }
 
   const openDeployment = (profile: DeploymentProfile) => {
     setDeploymentFormMode('edit')
     setDeploymentDraft({
       ...profile,
+      projectRoot: profile.projectRoot,
+      modulePath: profile.modulePath,
+      moduleArtifactId: profile.moduleArtifactId,
       remoteArtifactName: profile.remoteArtifactName ?? '',
       serviceDescription: profile.serviceDescription ?? '',
       serviceAlias: profile.serviceAlias ?? '',
@@ -878,25 +919,33 @@ export function DeploymentCenterPanel() {
     })
     setSelectedStepId(profile.deploymentSteps?.[0]?.id)
     setActiveDeploymentTab('profile')
+    setDeploymentEditorOpen(true)
   }
 
   const newDeployment = () => {
     setDeploymentFormMode('create')
-    setDeploymentDraft(createDeploymentDraft())
+    setDeploymentDraft({...createDeploymentDraft(), projectRoot})
     setSelectedStepId(undefined)
+    setDeploymentEditorOpen(true)
   }
 
-  const saveServerDraft = async () => {
+  const saveServerDraft = async (closeEditor = true) => {
     if (serverFormMode === 'create') {
       const created = await api.saveServerProfile({...serverDraft, id: undefined})
       await refreshDeploymentData()
       setServerFormMode('edit')
       setServerDraft({...serverDraft, id: created.id, password: ''})
+      if (closeEditor) {
+        setServerEditorOpen(false)
+      }
       return created
     }
     const saved = await api.saveServerProfile(serverDraft)
     await refreshDeploymentData()
     setServerDraft({...serverDraft, id: saved.id, password: ''})
+    if (closeEditor) {
+      setServerEditorOpen(false)
+    }
     return saved
   }
 
@@ -904,7 +953,7 @@ export function DeploymentCenterPanel() {
     setTestingServerId('draft')
     setTestResult(undefined)
     try {
-      const saved = await saveServerDraft()
+      const saved = await saveServerDraft(false)
       const msg = await testServerConnection(saved.id)
       setTestResult({serverId: 'draft', success: true, message: msg})
     } catch (err) {
@@ -915,12 +964,17 @@ export function DeploymentCenterPanel() {
   }
 
   const saveDeploymentDraft = async () => {
-    const profile = deploymentFormMode === 'create'
-      ? {...deploymentDraft, id: crypto.randomUUID()}
-      : deploymentDraft
+    const profile = {
+      ...(deploymentFormMode === 'create'
+        ? {...deploymentDraft, id: crypto.randomUUID()}
+        : deploymentDraft),
+      projectRoot,
+      ...moduleSnapshot(deploymentDraft.moduleId),
+    }
     await saveDeploymentProfile(profile)
     setDeploymentFormMode('edit')
     setDeploymentDraft(profile)
+    setDeploymentEditorOpen(false)
   }
 
   const packageDeploymentArtifact = async () => {
@@ -1115,7 +1169,7 @@ export function DeploymentCenterPanel() {
                       <HistoryOutlined className="deployment-summary-icon" />
                       <div>
                         <Text type="secondary">最近部署</Text>
-                        <div className="deployment-summary-number">{deploymentTasks.length}</div>
+                        <div className="deployment-summary-number">{currentProjectDeploymentTasks.length}</div>
                         <Text type="secondary">{deploymentSuccessCount} 次成功</Text>
                       </div>
                     </div>
@@ -1247,7 +1301,7 @@ export function DeploymentCenterPanel() {
                           <List.Item>
                             <Space direction="vertical" size={2} className="artifact-item">
                               <Space size={8} wrap>
-                                <Tag>{moduleLabel(modules, profile.moduleId)}</Tag>
+                                  <Tag>{profileModuleLabel(modules, profile)}</Tag>
                                 <Text strong>{profile.name}</Text>
                               </Space>
                               <Text type="secondary" className="artifact-meta">
@@ -1267,17 +1321,20 @@ export function DeploymentCenterPanel() {
               label: '环境资源',
               children: (
                 <Space direction="vertical" size={16} style={{width: '100%'}}>
-                  <Alert
-                    type={serverFormMode === 'edit' ? 'warning' : 'info'}
-                    showIcon
-                    message={serverFormMode === 'edit' ? `正在编辑服务器：${serverDraft.name || serverDraft.host}` : '正在新增服务器'}
-                    description={serverFormMode === 'edit' ? '保存会覆盖当前服务器配置；如需新建，请先点击“新增服务器”。' : '填写服务器连接信息后保存；测试连接会先保存当前表单再复用部署连接逻辑验证。'}
-                    action={(
-                      <Button size="small" onClick={newServer}>
-                        新增服务器
-                      </Button>
-                    )}
-                  />
+                  <div className="table-toolbar">
+                    <Button type="primary" icon={<PlusOutlined />} onClick={newServer}>
+                      新增服务器
+                    </Button>
+                  </div>
+                  <Modal
+                    title={serverFormMode === 'edit' ? `编辑服务器：${serverDraft.name || serverDraft.host || '未命名'}` : '新增服务器'}
+                    open={serverEditorOpen}
+                    width={760}
+                    footer={null}
+                    onCancel={() => setServerEditorOpen(false)}
+                    destroyOnHidden
+                  >
+                    <Space direction="vertical" size={16} style={{width: '100%'}}>
                   <Space wrap>
                     <Input
                       placeholder="名称"
@@ -1345,7 +1402,7 @@ export function DeploymentCenterPanel() {
                     >
                       测试连接
                     </Button>
-                    <Button onClick={newServer}>取消编辑</Button>
+                    <Button onClick={() => setServerEditorOpen(false)}>取消编辑</Button>
                     {testResult?.serverId === 'draft' && (
                       <Alert
                         type={testResult.success ? 'success' : 'error'}
@@ -1357,6 +1414,8 @@ export function DeploymentCenterPanel() {
                       />
                     )}
                   </Space>
+                    </Space>
+                  </Modal>
                   {serverProfiles.length === 0 ? (
                     <Empty description="暂无服务器配置" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                   ) : (
@@ -1455,13 +1514,21 @@ export function DeploymentCenterPanel() {
               label: '服务映射',
               children: (
                 <Space direction="vertical" size={16} style={{width: '100%'}}>
-                  <Alert
-                    type={deploymentFormMode === 'edit' ? 'warning' : 'info'}
-                    showIcon
-                    message={deploymentFormMode === 'edit' ? `正在编辑服务映射：${deploymentDraft.name || '未命名'}` : '正在新增服务映射'}
-                    description={deploymentFormMode === 'edit' ? '保存会覆盖当前映射；应用模板只替换此映射的流程副本，不会修改模板。' : '新增映射会创建独立配置；可先选择模板快速生成部署流程。'}
-                    action={<Button size="small" onClick={newDeployment}>新增映射</Button>}
-                  />
+                  <div className="table-toolbar">
+                    <Button type="primary" icon={<PlusOutlined />} onClick={newDeployment}>
+                      新增映射
+                    </Button>
+                  </div>
+                  <Modal
+                    title={deploymentFormMode === 'edit' ? `编辑服务映射：${deploymentDraft.name || '未命名'}` : '新增服务映射'}
+                    open={deploymentEditorOpen}
+                    width="min(980px, calc(100vw - 64px))"
+                    footer={null}
+                    onCancel={() => setDeploymentEditorOpen(false)}
+                    destroyOnHidden
+                  >
+                    <div className="deployment-form-modal">
+                      <Space direction="vertical" size={16} style={{width: '100%'}}>
                   <Input
                     addonBefore="服务名称"
                     value={deploymentDraft.name}
@@ -1492,7 +1559,7 @@ export function DeploymentCenterPanel() {
                         label: `${item.artifactId}${item.relativePath ? ` · ${item.relativePath}` : ''}`,
                         value: item.id,
                       }))}
-                      onChange={(value) => setDeploymentDraft((state) => ({...state, moduleId: value}))}
+                      onChange={(value) => setDeploymentDraft((state) => ({...state, ...moduleSnapshot(value)}))}
                     />
                     <Input
                       placeholder="产物匹配规则，如 *.jar"
@@ -2018,70 +2085,19 @@ export function DeploymentCenterPanel() {
                     <Button type="primary" icon={<SaveOutlined />} onClick={() => void saveDeploymentDraft()}>
                       {deploymentFormMode === 'edit' ? '保存映射修改' : '保存新增映射'}
                     </Button>
-                    <Button onClick={newDeployment}>取消编辑</Button>
+                    <Button onClick={() => setDeploymentEditorOpen(false)}>取消编辑</Button>
                   </Space>
-                  {deploymentProfiles.length === 0 ? (
+                      </Space>
+                    </div>
+                  </Modal>
+                  {currentProjectDeploymentProfiles.length === 0 ? (
                     <Empty description="暂无服务映射" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                  ) : (
-                    <List
-                      bordered
-                      dataSource={deploymentProfiles}
-                      renderItem={(profile) => (
-                        <List.Item
-                          actions={[
-                            <Button key="edit" size="small" onClick={() => openDeployment(profile)}>
-                              编辑此映射
-                            </Button>,
-                            <Popconfirm
-                              key="delete"
-                              title="删除服务映射？"
-                              okText="删除"
-                              cancelText="取消"
-                              onConfirm={() => void deleteDeploymentProfile(profile.id)}
-                            >
-                              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-                            </Popconfirm>,
-                          ]}
-                        >
-                            <Space direction="vertical" size={2}>
-                            <Text strong>{profile.name}</Text>
-                            <Text type="secondary">
-                              模块：{profile.moduleId ? (moduleById.get(profile.moduleId)?.artifactId ?? '当前项目不存在该模块') : '未绑定'}
-                            </Text>
-                            <Text type="secondary">{profile.remoteDeployPath}</Text>
-                            <Text type="secondary">匹配：{profile.localArtifactPattern}</Text>
-                            <Text type="secondary">
-                              部署流程：{profile.deploymentSteps?.length
-                                ? `${profile.deploymentSteps.filter((step) => step.enabled).length}/${profile.deploymentSteps.length} 个步骤启用`
-                                : `${profile.customCommands.filter((c) => c.enabled).length} 条旧版命令启用`}
-                            </Text>
-                          </Space>
-                        </List.Item>
-                      )}
-                    />
-                  )}
-                </Space>
-              ),
-            },
-            {
-              key: 'dictionary',
-              label: '服务字典',
-              children: (
-                <Space direction="vertical" size={16} style={{width: '100%'}}>
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="服务字典"
-                    description="以表格形式统一查看所有服务的简称、名称、模块、Jar、日志路径、PID、端口和健康检查地址，便于快速定位和对比服务配置。"
-                  />
-                  {deploymentProfiles.length === 0 ? (
-                    <Empty description="暂无服务映射，请先在「服务映射」页签中创建" />
                   ) : (
                     <Table
                       rowKey="id"
                       size="small"
                       className="service-dictionary-table"
-                      dataSource={deploymentProfiles}
+                      dataSource={currentProjectDeploymentProfiles}
                       pagination={false}
                       columns={[
                         {
@@ -2105,14 +2121,14 @@ export function DeploymentCenterPanel() {
                           title: '模块',
                           dataIndex: 'moduleId',
                           width: 160,
-                          render: (value: string) => {
-                            const mod = moduleById.get(value)
+                          render: (value: string, record: DeploymentProfile) => {
+                            const mod = findProfileModule(modules, record)
                             return mod ? (
                               <Space direction="vertical" size={2} className="service-dictionary-cell">
                                 <Text>{mod.artifactId}</Text>
                                 {mod.relativePath ? <Text type="secondary">{mod.relativePath}</Text> : null}
                               </Space>
-                            ) : <Text type="secondary">未绑定</Text>
+                            ) : <Text type="secondary">{record.moduleArtifactId || value || '未绑定'}</Text>
                           },
                         },
                         {
@@ -2151,17 +2167,27 @@ export function DeploymentCenterPanel() {
                         },
                         {
                           title: '操作',
-                          width: 92,
+                          width: 160,
                           render: (_: unknown, record: DeploymentProfile) => (
-                            <Tooltip title="编辑此映射">
-                              <Button
-                                size="small"
-                                icon={<EditOutlined />}
-                                onClick={() => openDeployment(record)}
+                            <Space size={4}>
+                              <Tooltip title="编辑此映射">
+                                <Button
+                                  size="small"
+                                  icon={<EditOutlined />}
+                                  onClick={() => openDeployment(record)}
+                                >
+                                  编辑
+                                </Button>
+                              </Tooltip>
+                              <Popconfirm
+                                title="删除服务映射？"
+                                okText="删除"
+                                cancelText="取消"
+                                onConfirm={() => void deleteDeploymentProfile(record.id)}
                               >
-                                编辑
-                              </Button>
-                            </Tooltip>
+                                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                              </Popconfirm>
+                            </Space>
                           ),
                         },
                       ]}
@@ -2175,13 +2201,29 @@ export function DeploymentCenterPanel() {
               label: '部署模板',
               children: (
                 <Space direction="vertical" size={16} style={{width: '100%'}}>
-                  <Alert
-                    type={templateFormMode === 'edit' ? 'warning' : 'info'}
-                    showIcon
-                    message={templateFormMode === 'edit' ? `正在编辑模板：${templateDraft.name}` : '正在新增部署模板'}
-                    description="模板是可复用的流程蓝图；服务映射应用模板时会复制一份流程，之后修改映射流程不会影响模板。"
-                    action={<Button size="small" onClick={() => { setTemplateDraft(createTemplateDraft()); setTemplateFormMode('create'); setSelectedTemplateStepId(undefined) }}>新增模板</Button>}
-                  />
+                  <div className="table-toolbar">
+                    <Button
+                      type="primary"
+                      icon={<PlusOutlined />}
+                      onClick={() => {
+                        setTemplateDraft(createTemplateDraft())
+                        setTemplateFormMode('create')
+                        setSelectedTemplateStepId(undefined)
+                        setTemplateEditorOpen(true)
+                      }}
+                    >
+                      新增模板
+                    </Button>
+                  </div>
+                  <Modal
+                    title={templateFormMode === 'edit' ? `编辑模板：${templateDraft.name || '未命名'}` : '新增部署模板'}
+                    open={templateEditorOpen}
+                    width="min(880px, calc(100vw - 64px))"
+                    footer={null}
+                    onCancel={() => setTemplateEditorOpen(false)}
+                    destroyOnHidden
+                  >
+                    <Space direction="vertical" size={16} style={{width: '100%'}}>
                   <Input
                     addonBefore="模板名称"
                     value={templateDraft.name}
@@ -2227,6 +2269,8 @@ export function DeploymentCenterPanel() {
                       />
                     )}
                   </Card>
+                    </Space>
+                  </Modal>
                   <List
                     bordered
                     dataSource={deploymentTemplates}
@@ -2275,7 +2319,7 @@ export function DeploymentCenterPanel() {
                     placeholder="选择服务映射"
                     style={{minWidth: 260}}
                     value={selectedDeploymentProfileId}
-                    options={deploymentProfiles.map((item) => ({label: item.name, value: item.id}))}
+                    options={currentProjectDeploymentProfiles.map((item) => ({label: item.name, value: item.id}))}
                     onChange={(value) => {
                       setSelectedDeploymentProfileId(value)
                       setSelectedArtifactPath(undefined)
@@ -2386,10 +2430,10 @@ export function DeploymentCenterPanel() {
                     <Button
                       danger
                       icon={<StopOutlined />}
-                      disabled={!deploymentRunning || !currentDeploymentTask}
+                      disabled={!deploymentRunning || !visibleDeploymentTask}
                       onClick={() => {
-                        if (currentDeploymentTask) {
-                          void cancelDeployment(currentDeploymentTask.id)
+                        if (visibleDeploymentTask) {
+                          void cancelDeployment(visibleDeploymentTask.id)
                         }
                       }}
                     >
@@ -2401,36 +2445,36 @@ export function DeploymentCenterPanel() {
                       type={selectedProfileModuleMissing ? 'warning' : 'info'}
                       showIcon
                       message={`服务映射：${selectedProfile.name}`}
-                      description={`模块：${selectedProfileModule?.artifactId ?? (selectedProfile.moduleId ? '当前项目不存在该模块' : '未绑定')}；目标目录：${selectedProfile.remoteDeployPath}；匹配规则：${selectedProfile.localArtifactPattern}；部署流程：${selectedProfile.deploymentSteps?.filter((step) => step.enabled).length ?? 0} 个启用步骤${selectedServer ? `；服务器：${selectedServer.name}` : ''}`}
+                      description={`模块：${selectedProfileModule?.artifactId ?? (selectedProfile.moduleId || selectedProfile.modulePath ? '当前项目不存在该模块' : '未绑定')}；目标目录：${selectedProfile.remoteDeployPath}；匹配规则：${selectedProfile.localArtifactPattern}；部署流程：${selectedProfile.deploymentSteps?.filter((step) => step.enabled).length ?? 0} 个启用步骤${selectedServer ? `；服务器：${selectedServer.name}` : ''}`}
                     />
                   ) : null}
-                  {currentDeploymentTask ? (
+                  {visibleDeploymentTask ? (
                     <div className="pipeline-run-bar">
                       <Space size={8} wrap className="pipeline-run-heading">
-                          <Tag color={deploymentTaskColor(currentDeploymentTask.status)}>
-                            {deploymentTaskLabel(currentDeploymentTask.status)}
+                          <Tag color={deploymentTaskColor(visibleDeploymentTask.status)}>
+                            {deploymentTaskLabel(visibleDeploymentTask.status)}
                           </Tag>
-                          <Text className="pipeline-run-title" title={currentDeploymentTask.deploymentProfileName ?? currentDeploymentTask.deploymentProfileId}>
-                            {currentDeploymentTask.deploymentProfileName ?? currentDeploymentTask.deploymentProfileId}
+                          <Text className="pipeline-run-title" title={visibleDeploymentTask.deploymentProfileName ?? visibleDeploymentTask.deploymentProfileId}>
+                            {visibleDeploymentTask.deploymentProfileName ?? visibleDeploymentTask.deploymentProfileId}
                           </Text>
                       </Space>
-                      <Text type="secondary" className="path-text">{currentDeploymentTask.artifactPath}</Text>
-                      {currentDeploymentTask.log.length > 0 ? (
+                      <Text type="secondary" className="path-text">{visibleDeploymentTask.artifactPath}</Text>
+                      {visibleDeploymentTask.log.length > 0 ? (
                         <div className="deployment-connection-log">
-                          <Text type="secondary">{currentDeploymentTask.log[currentDeploymentTask.log.length - 1]}</Text>
+                          <Text type="secondary">{visibleDeploymentTask.log[visibleDeploymentTask.log.length - 1]}</Text>
                         </div>
                       ) : null}
                       <Steps
                         direction="vertical"
                         size="small"
                         current={deploymentProgressCurrent(deploymentStages)}
-                        status={['failed', 'cancelled'].includes(currentDeploymentTask.status) ? 'error' : currentDeploymentTask.status === 'success' ? 'finish' : 'process'}
+                        status={['failed', 'cancelled'].includes(visibleDeploymentTask.status) ? 'error' : visibleDeploymentTask.status === 'success' ? 'finish' : 'process'}
                         items={deploymentStages.map((stage) => ({
                           title: stage.label,
                           status: deploymentStageStatus(stage.status),
                           description: (
                             <Space direction="vertical" size={2}>
-                              <UploadStepDescription taskId={currentDeploymentTask.id} stage={stage} />
+                              <UploadStepDescription taskId={visibleDeploymentTask.id} stage={stage} />
                               {stage.probeStatuses && stage.probeStatuses.length > 0 ? (
                                 <div className="probe-status-list">
                                   {stage.probeStatuses.map((ps: ProbeStatus, idx: number) => {
@@ -2451,12 +2495,12 @@ export function DeploymentCenterPanel() {
                           ),
                         }))}
                       />
-                      {currentDeploymentTask.probeResult ? (
+                      {visibleDeploymentTask.probeResult ? (
                         <Alert
-                          type={currentDeploymentTask.status === 'success' ? 'success' : 'error'}
+                          type={visibleDeploymentTask.status === 'success' ? 'success' : 'error'}
                           showIcon
-                          message={currentDeploymentTask.status === 'success' ? '启动探针检测通过' : '启动探针检测失败'}
-                          description={currentDeploymentTask.probeResult}
+                          message={visibleDeploymentTask.status === 'success' ? '启动探针检测通过' : '启动探针检测失败'}
+                          description={visibleDeploymentTask.probeResult}
                           style={{marginTop: 8}}
                         />
                       ) : null}

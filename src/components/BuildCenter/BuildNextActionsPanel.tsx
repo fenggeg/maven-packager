@@ -2,7 +2,13 @@ import {Alert, Button, Card, Empty, Input, List, Modal, Select, Space, Tag, Typo
 import {FolderOpenOutlined, RocketOutlined, SettingOutlined} from '@ant-design/icons'
 import {useMemo, useState} from 'react'
 import {api} from '../../services/tauri-api'
-import {findDeployableArtifacts, flattenModules, pickDefaultTestServer,} from '../../services/deploymentTopologyService'
+import {
+    belongsToProject,
+    findDeployableArtifacts,
+    flattenModules,
+    normalizeProjectRoot,
+    pickDefaultTestServer,
+} from '../../services/deploymentTopologyService'
 import {useAppStore} from '../../store/useAppStore'
 import {useWorkflowStore} from '../../store/useWorkflowStore'
 
@@ -29,13 +35,18 @@ export function BuildNextActionsPanel() {
   const modules = useMemo(() => flattenModules(project?.modules ?? []), [project?.modules])
   const mappedProfiles = useMemo(
     () => deploymentProfiles.filter((profile) =>
+      belongsToProject(profile, project?.rootPath) &&
       artifacts.some((artifact) => findDeployableArtifacts([artifact], profile, modules).length > 0)),
-    [artifacts, deploymentProfiles, modules],
+    [artifacts, deploymentProfiles, modules, project?.rootPath],
   )
   const effectiveDeploymentProfileId = mappedProfiles.some((profile) => profile.id === selectedDeploymentProfileId)
     ? selectedDeploymentProfileId
     : mappedProfiles[0]?.id
   const selectedProfile = mappedProfiles.find((profile) => profile.id === effectiveDeploymentProfileId)
+  const visibleDeploymentTask = currentDeploymentTask
+    && normalizeProjectRoot(currentDeploymentTask.projectRoot) === normalizeProjectRoot(project?.rootPath)
+    ? currentDeploymentTask
+    : undefined
   const artifactOptions = useMemo(
     () => selectedProfile
       ? findDeployableArtifacts(artifacts, selectedProfile, modules).map((artifact) => ({
@@ -45,7 +56,7 @@ export function BuildNextActionsPanel() {
       : [],
     [artifacts, modules, selectedProfile],
   )
-  const deploymentRunning = Boolean(currentDeploymentTask && !deploymentFinished(currentDeploymentTask.status))
+  const deploymentRunning = Boolean(visibleDeploymentTask && !deploymentFinished(visibleDeploymentTask.status))
   const hasServiceMapping = mappedProfiles.length > 0
   const defaultTestServer = useMemo(() => pickDefaultTestServer(serverProfiles), [serverProfiles])
   const effectiveServerId = serverProfiles.some((server) => server.id === selectedServerId)
